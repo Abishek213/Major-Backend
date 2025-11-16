@@ -60,24 +60,38 @@ const connectDB = async () => {
   try {
     await mongoose.connect(URI);
     console.log("Connected to MongoDB");
-    console.log("Starting database seeding...");
-    console.log("1. Seeding roles...");
-    await seedRoles();
-    console.log("2. Seeding permissions...");
-    await seedPermissions();
-    console.log("3. Seeding users...");
-    await seedUsers();
-    console.log("4. Seeding Categories ...");
-    await seedCategories();
-    console.log("5. Seeding events...");
-    await seedEvents();
-    console.log("6. Seeding role permissions...");
-    await seedRolePermissions();
+
+    // Only seed database in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log("Starting database seeding...");
+
+      console.log("1. Seeding roles...");
+      await seedRoles();
+
+      console.log("2. Seeding permissions...");
+      await seedPermissions();
+
+      console.log("3. Seeding users...");
+      await seedUsers();
+
+      console.log("4. Seeding Categories ...");
+      await seedCategories();
+
+      console.log("5. Seeding events...");
+      await seedEvents();
+
+      console.log("6. Seeding role permissions...");
+      await seedRolePermissions();
+    } else {
+      console.log("Skipping database seeding in production");
+    }
+    
   } catch (error) {
     console.error("Error connecting to MongoDB:", error.message);
     process.exit(1);
   }
 };
+
 
 // Updated graceful shutdown handler
 async function gracefulShutdown(signal) {
