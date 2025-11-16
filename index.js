@@ -9,7 +9,7 @@ import path from 'path';
 import crypto from 'crypto';
 
 import seedRoles from './seeders/roleSeeder.js';
-import seedPermissions from './seeders/PermissionSeeder.js';
+import seedPermissions from './seeders/permissionSeeder.js';
 import seedUsers from './seeders/userSeeder.js';
 import seedEvents from './seeders/eventSeeder.js';
 import seedCategories from './seeders/categorieSeeder.js';
