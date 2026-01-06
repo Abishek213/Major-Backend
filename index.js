@@ -1,29 +1,30 @@
-import dotenv from 'dotenv';
-import express from 'express';
-import mongoose from 'mongoose';
-import http from 'http';
-import { wsManager } from './webSocket.js';
-import fileUpload from 'express-fileupload';
-import path from 'path';
-import crypto from 'crypto';
+import dotenv from "dotenv";
+import express from "express";
+import mongoose from "mongoose";
+import http from "http";
+import { wsManager } from "./webSocket.js";
+import fileUpload from "express-fileupload";
+import path from "path";
 
 // Seeders
-import seedRoles from './seeders/roleSeeder.js';
-import seedPermissions from './seeders/permissionSeeder.js';
-import seedUsers from './seeders/userSeeder.js';
-import seedEvents from './seeders/eventSeeder.js';
-import seedCategories from './seeders/categorieSeeder.js';
-import seedRolePermissions from './seeders/rolePermissionSeeder.js';
+import seedRoles from "./seeders/roleSeeder.js";
+import seedPermissions from "./seeders/permissionSeeder.js";
+import seedUsers from "./seeders/userSeeder.js";
+import seedEvents from "./seeders/eventSeeder.js";
+import seedCategories from "./seeders/categorieSeeder.js";
+import seedRolePermissions from "./seeders/rolePermissionSeeder.js";
+import seedAIAgents from "./seeders/aiSeeder.js";
 
 // Routes
-import eventRoutes from './routes/Event.routes.js';
-import userRoute from './routes/user.route.js';
-import bookingRoutes from './routes/booking.routes.js';
-import roleRoute from './routes/role.route.js';
-import adminRoutes from './routes/admin.routes.js';
-import categoriesRoutes from './routes/categories.routes.js';
-import notificationRoutes from './routes/notification.routes.js';
-import eventRequestRoutes from './routes/eventrequest.routes.js';
+import eventRoutes from "./routes/Event.routes.js";
+import userRoute from "./routes/user.route.js";
+import bookingRoutes from "./routes/booking.routes.js";
+import roleRoute from "./routes/role.route.js";
+import adminRoutes from "./routes/admin.routes.js";
+import categoriesRoutes from "./routes/categories.routes.js";
+import notificationRoutes from "./routes/notification.routes.js";
+import eventRequestRoutes from "./routes/eventrequest.routes.js";
+import aiRoutes from "./routes/ai.routes.js";
 
 dotenv.config();
 
@@ -33,12 +34,10 @@ const server = http.createServer(app);
 // Attach websocket manager
 wsManager.initialize(server);
 
-// ------------------------------
-// ✅ FIXED CORS MIDDLEWARE
-// ------------------------------
+// CORS MIDDLEWARE
 const allowedOrigins = [
-  "https://eventa-puce.vercel.app",   // Your frontend
-  "http://localhost:5173"             // Local dev
+  "https://eventa-puce.vercel.app",
+  "http://localhost:5173",
 ];
 
 app.use((req, res, next) => {
@@ -49,7 +48,10 @@ app.use((req, res, next) => {
   }
 
   res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  );
   res.header(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization, X-Requested-With, Accept, Origin"
@@ -62,15 +64,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// ------------------------------
 // Express setup
-// ------------------------------
 app.use(express.json());
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-// ------------------------------
 // MongoDB Connection
-// ------------------------------
 if (!process.env.MongoDB_URI) {
   console.error("ERROR: MongoDB URI missing in .env");
   process.exit(1);
@@ -85,7 +83,7 @@ const connectDB = async () => {
     console.log("Connected to MongoDB");
 
     // Seed only in development
-    if (process.env.NODE_ENV !== 'production') {
+    if (process.env.NODE_ENV !== "production") {
       console.log("Database seeding started...");
 
       await seedRoles();
@@ -94,6 +92,7 @@ const connectDB = async () => {
       await seedCategories();
       await seedEvents();
       await seedRolePermissions();
+      await seedAIAgents();
 
       console.log("Database seeding completed.");
     } else {
@@ -107,59 +106,50 @@ const connectDB = async () => {
 
 connectDB();
 
-// ------------------------------
 // File Upload
-// ------------------------------
 app.use(
   fileUpload({
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
     createParentPath: true,
     abortOnLimit: true,
-    responseOnLimit: 'File size too large'
+    responseOnLimit: "File size too large",
   })
 );
 
-// ------------------------------
 // API Routes
-// ------------------------------
-app.use('/api/v1/events', eventRoutes);
-app.use('/api/v1/users', userRoute);
-app.use('/api/v1/bookings', bookingRoutes);
-app.use('/api/v1/roles', roleRoute);
+app.use("/api/v1/events", eventRoutes);
+app.use("/api/v1/users", userRoute);
+app.use("/api/v1/bookings", bookingRoutes);
+app.use("/api/v1/roles", roleRoute);
 app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
-app.use('/api/v1/admin', adminRoutes);
-app.use('/api/v1/eventrequest', eventRequestRoutes);
+app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/eventrequest", eventRequestRoutes);
+app.use("/api/v1/ai", aiRoutes);
 
-// ------------------------------
 // Global Error Handler
-// ------------------------------
 app.use((err, req, res, next) => {
   console.error("Error:", err);
 
   if (err.message.includes("CORS")) {
     return res.status(500).json({
       success: false,
-      message: "CORS error occurred"
+      message: "CORS error occurred",
     });
   }
 
   res.status(err.status || 500).json({
     success: false,
-    message: err.message || "Internal server error"
+    message: err.message || "Internal server error",
   });
 });
 
-// ------------------------------
 // Health Check
-// ------------------------------
-app.get('/', (req, res) => {
-  res.send('API is running...');
+app.get("/", (req, res) => {
+  res.send("API is running...");
 });
 
-// ------------------------------
 // Graceful Shutdown
-// ------------------------------
 async function gracefulShutdown(signal) {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
 
@@ -170,7 +160,7 @@ async function gracefulShutdown(signal) {
     }
 
     await new Promise((resolve, reject) => {
-      server.close(err => {
+      server.close((err) => {
         if (err) reject(err);
         else resolve();
       });
@@ -187,13 +177,11 @@ async function gracefulShutdown(signal) {
   }
 }
 
-['SIGTERM', 'SIGINT', 'SIGUSR2'].forEach(signal => {
+["SIGTERM", "SIGINT", "SIGUSR2"].forEach((signal) => {
   process.on(signal, () => gracefulShutdown(signal));
 });
 
-// ------------------------------
 // Start Server
-// ------------------------------
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

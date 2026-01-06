@@ -35,3 +35,6 @@ export const protectAdmin = async (req, res, next) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
+// NEW: Create an alias for backward compatibility
+export const adminMiddleware = protectAdmin;
