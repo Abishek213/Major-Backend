@@ -9,9 +9,9 @@ import Review from "../model/review.schema.js";
  * ============================================================================
  * AI SERVICE - BACKEND INTEGRATION LAYER
  * ============================================================================
- * 
+ *
  * This service acts as the integration layer between Backend and AI Agent Service
- * 
+ *
  * RESPONSIBILITIES:
  * - Build user context from database
  * - Fetch candidate events
@@ -19,7 +19,7 @@ import Review from "../model/review.schema.js";
  * - Cache recommendations
  * - Provide fallback data
  * - Health monitoring
- * 
+ *
  * ============================================================================
  */
 
@@ -41,7 +41,13 @@ class AIService {
     // We import User dynamically to avoid circular dependency issues
     const { default: User } = await import("../model/user.schema.js");
     const user = await User.findById(userId)
-      .populate("wishlist")
+      .populate({
+        path: "wishlist",
+        populate: {
+          path: "category",
+          select: "category_Name",
+        },
+      })
       .select("wishlist")
       .lean();
 
@@ -51,7 +57,12 @@ class AIService {
     const bookings = await Booking.find({ userId })
       .populate({
         path: "eventId",
-        select: "event_name category tags price location event_date",
+        select:
+          "event_name category tags price location event_date attendees totalSlots",
+        populate: {
+          path: "category",
+          select: "category_Name",
+        },
       })
       .select("eventId")
       .lean();
@@ -62,7 +73,12 @@ class AIService {
     const reviews = await Review.find({ userId })
       .populate({
         path: "eventId",
-        select: "event_name category tags price location event_date",
+        select:
+          "event_name category tags price location event_date attendees totalSlots",
+        populate: {
+          path: "category",
+          select: "category_Name",
+        },
       })
       .select("eventId rating")
       .lean();
@@ -106,8 +122,9 @@ class AIService {
         `📡 Calling AI Agent | candidates: ${candidateEvents.length} | wishlist: ${userContext.wishlistEvents.length} | booked: ${userContext.bookedEvents.length}`
       );
 
+      // ✅ FIXED: Changed from /api/recommendations to /api/agents/user/recommendations
       const response = await axios.post(
-        `${this.aiAgentUrl}/api/recommendations`,
+        `${this.aiAgentUrl}/api/agents/user/recommendations`,
         {
           userId,
           limit,
@@ -277,43 +294,44 @@ class AIService {
   /**
    * Chat with booking support agent
    * Forwards chat request to AI Agent Service
-   * 
+   *
    * @param {Object} data - { message, userId, sessionId }
    * @returns {Promise<Object>} AI response with message and metadata
    */
   async chatBookingSupport(data) {
     try {
-      console.log(`💬 Forwarding chat to AI Agent: ${data.message?.substring(0, 50)}...`);
+      console.log(
+        `💬 Forwarding chat to AI Agent: ${data.message?.substring(0, 50)}...`
+      );
 
       const response = await axios.post(
         `${this.aiAgentUrl}/api/agents/user/booking-support/chat`,
         data,
-        { 
+        {
           timeout: 30000, // 30 second timeout (AI processing can take time)
           headers: {
-            'Content-Type': 'application/json',
-          }
+            "Content-Type": "application/json",
+          },
         }
       );
 
       console.log(`✅ AI Agent responded successfully`);
       return response.data;
-
     } catch (error) {
       console.error("Booking support chat error:", error.message);
-      
+
       // Return error in expected format
       throw new Error(
-        error.response?.data?.message || 
-        error.message || 
-        "Failed to communicate with booking support agent"
+        error.response?.data?.message ||
+          error.message ||
+          "Failed to communicate with booking support agent"
       );
     }
   }
 
   /**
    * Clear conversation history for a user
-   * 
+   *
    * @param {Object} data - { userId, sessionId }
    * @returns {Promise<Object>} Success response
    */
@@ -324,29 +342,27 @@ class AIService {
       const response = await axios.post(
         `${this.aiAgentUrl}/api/agents/user/booking-support/clear-history`,
         data,
-        { 
+        {
           timeout: 5000,
           headers: {
-            'Content-Type': 'application/json',
-          }
+            "Content-Type": "application/json",
+          },
         }
       );
 
       console.log(`✅ History cleared successfully`);
       return response.data;
-
     } catch (error) {
       console.error("Clear history error:", error.message);
       throw new Error(
-        error.response?.data?.message || 
-        "Failed to clear conversation history"
+        error.response?.data?.message || "Failed to clear conversation history"
       );
     }
   }
 
   /**
    * Check booking support agent health
-   * 
+   *
    * @returns {Promise<Object>} Health status with component details
    */
   async checkBookingSupportHealth() {
@@ -357,7 +373,6 @@ class AIService {
       );
 
       return response.data;
-
     } catch (error) {
       console.error("Booking support health check error:", error.message);
       return {
@@ -373,7 +388,7 @@ class AIService {
   /**
    * Get booking support agent statistics
    * Useful for monitoring dashboards
-   * 
+   *
    * @returns {Promise<Object>} Agent stats including sessions, performance, etc.
    */
   async getBookingSupportStats() {
@@ -384,12 +399,11 @@ class AIService {
       );
 
       return response.data;
-
     } catch (error) {
       console.error("Booking support stats error:", error.message);
       throw new Error(
-        error.response?.data?.message || 
-        "Failed to get booking support statistics"
+        error.response?.data?.message ||
+          "Failed to get booking support statistics"
       );
     }
   }

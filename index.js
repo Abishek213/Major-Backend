@@ -6,7 +6,6 @@ import { wsManager } from "./webSocket.js";
 import fileUpload from "express-fileupload";
 import path from "path";
 
-// Seeders
 import seedRoles from "./seeders/roleSeeder.js";
 import seedPermissions from "./seeders/permissionSeeder.js";
 import seedUsers from "./seeders/userSeeder.js";
@@ -15,7 +14,6 @@ import seedCategories from "./seeders/categorieSeeder.js";
 import seedRolePermissions from "./seeders/rolePermissionSeeder.js";
 import seedAIAgents from "./seeders/aiSeeder.js";
 
-// Routes
 import eventRoutes from "./routes/Event.routes.js";
 import userRoute from "./routes/user.route.js";
 import bookingRoutes from "./routes/booking.routes.js";
