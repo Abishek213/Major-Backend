@@ -13,12 +13,12 @@ import AIService from "../services/ai.service.js";
  * ============================================================================
  * BACKEND AI CONTROLLER
  * ============================================================================
- * 
+ *
  * This controller acts as a proxy between Frontend and AI Agent Service
- * 
+ *
  * ARCHITECTURE:
  * Frontend → Backend (this controller) → AI Agent Service
- * 
+ *
  * RESPONSIBILITIES:
  * - Authentication & authorization
  * - Request validation
@@ -26,7 +26,7 @@ import AIService from "../services/ai.service.js";
  * - Caching
  * - Error handling
  * - Logging
- * 
+ *
  * ============================================================================
  */
 
@@ -57,6 +57,10 @@ export const getAgents = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ======================================================
+// ===================== User Ai Agent ==================
+// ======================================================
 
 // ==================== AI RECOMMENDATIONS ====================
 export const getUserRecommendations = async (req, res) => {
@@ -208,20 +212,6 @@ export const getMyRecommendations = async (req, res) => {
 };
 
 // ==================== BOOKING SUPPORT CHAT ====================
-
-/**
- * POST /api/ai/booking-support/chat
- * 
- * Main endpoint for booking support chatbot
- * Forwards chat requests to AI Agent Service
- * 
- * Request Body:
- * {
- *   message: string (required),
- *   userId: string (optional - from auth middleware),
- *   sessionId: string (optional - for anonymous users)
- * }
- */
 export const chatBookingSupport = async (req, res) => {
   try {
     const { message } = req.body;
@@ -229,14 +219,20 @@ export const chatBookingSupport = async (req, res) => {
     const sessionId = req.body.sessionId;
 
     // Validation
-    if (!message || typeof message !== "string" || message.trim().length === 0) {
+    if (
+      !message ||
+      typeof message !== "string" ||
+      message.trim().length === 0
+    ) {
       return res.status(400).json({
         success: false,
         message: "Message is required and must be a non-empty string",
       });
     }
 
-    console.log(`💬 Booking support chat from ${userId || sessionId || "anonymous"}`);
+    console.log(
+      `💬 Booking support chat from ${userId || sessionId || "anonymous"}`
+    );
 
     // Forward to AI Agent Service
     const response = await AIService.chatBookingSupport({
@@ -247,25 +243,20 @@ export const chatBookingSupport = async (req, res) => {
 
     // Return AI response
     res.json(response);
-
   } catch (error) {
     console.error("Booking support chat error:", error);
 
     // Fallback response
     res.status(500).json({
       success: false,
-      message: "Sorry, I'm experiencing technical difficulties. Please try again or contact support@eventa.com",
+      message:
+        "Sorry, I'm experiencing technical difficulties. Please try again or contact support@eventa.com",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
       timestamp: new Date().toISOString(),
     });
   }
 };
 
-/**
- * POST /api/ai/booking-support/clear-history
- * 
- * Clear conversation history for a user
- */
 export const clearBookingSupportHistory = async (req, res) => {
   try {
     const userId = req.user?.id || req.body.userId;
@@ -287,7 +278,6 @@ export const clearBookingSupportHistory = async (req, res) => {
     });
 
     res.json(response);
-
   } catch (error) {
     console.error("Clear history error:", error);
     res.status(500).json({
@@ -298,18 +288,12 @@ export const clearBookingSupportHistory = async (req, res) => {
   }
 };
 
-/**
- * GET /api/ai/booking-support/health
- * 
- * Check booking support agent health
- */
 export const checkBookingSupportHealth = async (req, res) => {
   try {
     const health = await AIService.checkBookingSupportHealth();
-    
+
     const statusCode = health.status === "ready" ? 200 : 503;
     res.status(statusCode).json(health);
-
   } catch (error) {
     console.error("Booking support health check error:", error);
     res.status(503).json({
@@ -321,11 +305,6 @@ export const checkBookingSupportHealth = async (req, res) => {
   }
 };
 
-/**
- * GET /api/ai/booking-support/stats
- * 
- * Get booking support agent statistics
- */
 export const getBookingSupportStats = async (req, res) => {
   try {
     const stats = await AIService.getBookingSupportStats();
@@ -334,12 +313,365 @@ export const getBookingSupportStats = async (req, res) => {
       data: stats,
       timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error("Booking support stats error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get booking support statistics",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// ======================================================
+// ===================== Org Ai Agent ===================
+// ======================================================
+
+// ==================== EVENT PLANNING ====================
+/**
+ * POST /api/ai/organizer/plan-event
+ *
+ * Create comprehensive event plan using AI Planning Agent
+ *
+ * Request Body:
+ * {
+ *   eventType: string (required) - conference, workshop, wedding, birthday, concert, festival
+ *   budget: number (required) - Total budget in NPR
+ *   attendees: number (required) - Expected number of attendees
+ *   location: string (required) - Event location
+ *   eventDate: string (required) - Event date (ISO format)
+ * }
+ *
+ * Response:
+ * {
+ *   success: true,
+ *   data: {
+ *     plan: { ... },
+ *     processing_time: number,
+ *     agent_info: { ... }
+ *   }
+ * }
+ */
+export const planEvent = async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    const { eventType, budget, attendees, location, eventDate } = req.body;
+    const organizerId = req.user?.id; // From auth middleware
+
+    // Validation
+    if (!eventType || !budget || !attendees || !location || !eventDate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Missing required fields: eventType, budget, attendees, location, eventDate",
+      });
+    }
+
+    // Validate event type
+    const validEventTypes = [
+      "conference",
+      "workshop",
+      "wedding",
+      "birthday",
+      "concert",
+      "festival",
+    ];
+    if (!validEventTypes.includes(eventType.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid event type. Must be one of: ${validEventTypes.join(
+          ", "
+        )}`,
+      });
+    }
+
+    // Validate numbers
+    if (budget <= 0 || attendees <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Budget and attendees must be positive numbers",
+      });
+    }
+
+    // Validate date
+    const eventDateObj = new Date(eventDate);
+    if (isNaN(eventDateObj.getTime()) || eventDateObj < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "Event date must be a valid future date",
+      });
+    }
+
+    console.log(
+      `📋 Planning ${eventType} event for organizer: ${
+        organizerId || "anonymous"
+      }`
+    );
+
+    // Get or create planning agent in database
+    let planningAgent = await AI_Agent.findOne({
+      name: "planning-agent",
+      agent_type: "organizer",
+    });
+
+    if (!planningAgent) {
+      planningAgent = await AI_Agent.create({
+        name: "planning-agent",
+        role: "assistant",
+        agent_type: "organizer",
+        status: "active",
+        capabilities: {
+          event_planning: true,
+          budget_optimization: true,
+          timeline_generation: true,
+          vendor_recommendations: true,
+          risk_assessment: true,
+        },
+      });
+      console.log("✅ Planning agent registered in database");
+    }
+
+    // Forward to AI Agent Service
+    const planningResult = await AIService.planEvent({
+      eventType: eventType.toLowerCase(),
+      budget: parseFloat(budget),
+      attendees: parseInt(attendees),
+      location,
+      eventDate,
+      organizerId,
+    });
+
+    const processingTime = Date.now() - startTime;
+
+    // Check if planning was successful
+    if (!planningResult.success) {
+      // Log failed attempt
+      await AI_ActionLog.create({
+        agentId: planningAgent._id,
+        userId: organizerId || null,
+        logType: "event_planning",
+        actionDetails: {
+          eventType,
+          budget,
+          attendees,
+          location,
+          error: planningResult.error || planningResult.message,
+        },
+        success: false,
+        failureType: "api_error",
+      });
+
+      return res.status(500).json({
+        success: false,
+        message: planningResult.error || "Failed to create event plan",
+        details: planningResult.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Log successful action
+    await AI_ActionLog.create({
+      agentId: planningAgent._id,
+      userId: organizerId || null,
+      logType: "event_planning",
+      actionDetails: {
+        eventType,
+        budget,
+        attendees,
+        location,
+        plan_generated: true,
+        llm_enhanced: planningResult.plan?.metadata?.llm_enhanced || false,
+        processing_time: processingTime,
+      },
+      success: true,
+    });
+
+    // Return successful response
+    res.status(200).json({
+      success: true,
+      message: "Event plan generated successfully",
+      data: {
+        plan: planningResult.plan,
+        processing_time: processingTime,
+        agent_info: {
+          agent_id: planningAgent._id,
+          agent_name: planningAgent.name,
+          llm_enhanced: planningResult.plan?.metadata?.llm_enhanced || false,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    const processingTime = Date.now() - startTime;
+    console.error("❌ Event planning error:", error);
+
+    // Try to log error if possible
+    try {
+      const agent = await AI_Agent.findOne({ name: "planning-agent" });
+      if (agent) {
+        await AI_ActionLog.create({
+          agentId: agent._id,
+          userId: req.user?.id || null,
+          logType: "event_planning",
+          actionDetails: {
+            error: error.message,
+            processing_time: processingTime,
+          },
+          success: false,
+          failureType: "api_error",
+        });
+      }
+    } catch (logError) {
+      console.error("Failed to log error:", logError);
+    }
+
+    // Return error response
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate event plan",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Internal server error",
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
+/**
+ * GET /api/ai/organizer/planning-agent/health
+ *
+ * Check planning agent health and capabilities
+ */
+export const checkPlanningAgentHealth = async (req, res) => {
+  try {
+    const health = await AIService.checkPlanningAgentHealth();
+
+    const statusCode = health.status === "active" ? 200 : 503;
+    res.status(statusCode).json({
+      success: health.status === "active",
+      ...health,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Planning agent health check error:", error);
+    res.status(503).json({
+      success: false,
+      status: "error",
+      message: "Failed to check planning agent health",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
+/**
+ * GET /api/ai/organizer/planning-agent/stats
+ *
+ * Get planning agent statistics
+ */
+export const getPlanningAgentStats = async (req, res) => {
+  try {
+    const organizerId = req.user?.id;
+    const { timeRange = "30d" } = req.query;
+
+    // Calculate date range
+    const daysBack = timeRange === "7d" ? 7 : timeRange === "90d" ? 90 : 30;
+    const dateFrom = new Date();
+    dateFrom.setDate(dateFrom.getDate() - daysBack);
+
+    // Get planning agent
+    const agent = await AI_Agent.findOne({ name: "planning-agent" });
+
+    if (!agent) {
+      return res.status(404).json({
+        success: false,
+        message: "Planning agent not found",
+      });
+    }
+
+    // Build query filter
+    const filter = {
+      agentId: agent._id,
+      logType: "event_planning",
+      createdAt: { $gte: dateFrom },
+    };
+
+    // Add user filter if organizer is requesting their own stats
+    if (organizerId) {
+      filter.userId = organizerId;
+    }
+
+    // Get stats
+    const [totalPlans, successfulPlans, failedPlans, recentLogs] =
+      await Promise.all([
+        AI_ActionLog.countDocuments(filter),
+        AI_ActionLog.countDocuments({ ...filter, success: true }),
+        AI_ActionLog.countDocuments({ ...filter, success: false }),
+        AI_ActionLog.find(filter)
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .select("actionDetails success createdAt"),
+      ]);
+
+    // Calculate average processing time
+    const logsWithTime = recentLogs.filter(
+      (log) => log.actionDetails?.processing_time
+    );
+    const avgProcessingTime =
+      logsWithTime.length > 0
+        ? logsWithTime.reduce(
+            (sum, log) => sum + log.actionDetails.processing_time,
+            0
+          ) / logsWithTime.length
+        : 0;
+
+    // Get event type distribution
+    const eventTypeStats = await AI_ActionLog.aggregate([
+      { $match: { ...filter, success: true } },
+      {
+        $group: {
+          _id: "$actionDetails.eventType",
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          total_plans: totalPlans,
+          successful: successfulPlans,
+          failed: failedPlans,
+          success_rate:
+            totalPlans > 0
+              ? ((successfulPlans / totalPlans) * 100).toFixed(1)
+              : 0,
+          avg_processing_time_ms: Math.round(avgProcessingTime),
+        },
+        event_types: eventTypeStats.map((stat) => ({
+          type: stat._id,
+          count: stat.count,
+        })),
+        recent_activity: recentLogs.map((log) => ({
+          event_type: log.actionDetails?.eventType,
+          budget: log.actionDetails?.budget,
+          attendees: log.actionDetails?.attendees,
+          success: log.success,
+          created_at: log.createdAt,
+        })),
+        time_range: timeRange,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Planning agent stats error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get planning agent statistics",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
@@ -389,6 +721,10 @@ export const updateNegotiation = async (req, res) => {
     res.status(400).json({ success: false, message: error.message });
   }
 };
+
+// ======================================================
+// ===================== Admin Ai Agent =================
+// ======================================================
 
 // ==================== AI FRAUD CHECK ====================
 export const performFraudCheck = async (req, res) => {
@@ -644,6 +980,9 @@ export default {
   getUserRecommendations,
   createRecommendation,
   getMyRecommendations,
+  planEvent,
+  checkPlanningAgentHealth,
+  getPlanningAgentStats,
   createNegotiation,
   updateNegotiation,
   performFraudCheck,

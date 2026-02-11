@@ -20,6 +20,7 @@ const aiActionLogSchema = new mongoose.Schema(
         "fraud_check",
         "sentiment_analysis",
         "system_alert",
+        "event_planning",
       ],
     },
     actionDetails: {
