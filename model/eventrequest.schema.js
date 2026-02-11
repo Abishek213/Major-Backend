@@ -16,7 +16,47 @@ const eventRequestSchema = new mongoose.Schema({
       responseDate: { type: Date, default: Date.now },
       proposedBudget: { type: Number },
     }
-  ]
+  ],
+
+   // NEW: AI Insights field
+  aiInsights: {
+    type: {
+      processed: { type: Boolean, default: false },
+      reprocessed: { type: Boolean, default: false },
+      matchedOrganizers: [{
+        id: String,
+        name: String,
+        matchPercentage: Number,
+        expertise: [String],
+        location: String,
+        rating: Number,
+        priceRange: [Number]
+      }],
+      budgetAnalysis: {
+        userBudget: Number,
+        industryAverage: Number,
+        feasibility: String,
+        recommendedBudget: Number,
+        budgetRange: {
+          min: Number,
+          max: Number
+        }
+      },
+      suggestions: {
+        budget: Object,
+        timing: Object,
+        location: Object,
+        organizerSelection: Object
+      },
+      processingTime: { type: Date, default: Date.now },
+      previousInsights: { type: Object }
+    },
+    default: null
+  }
+}, {
+  timestamps: true // Adds createdAt and updatedAt automatically
+
+
 });
 
 export const EventRequest = mongoose.model('EventRequest', eventRequestSchema);

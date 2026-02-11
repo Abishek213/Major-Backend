@@ -20,7 +20,9 @@ export const authenticateUser = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // Find the user associated with the token
-    const user = await User.findById(decoded.user.id).select('-password'); // Exclude password for security
+    const user = await User.findById(decoded.userId).select('-password'); // Exclude password for security
+
+    
     if (!user) {
       return res.status(401).json({ message: 'Authorization denied: User not found' });
     }
