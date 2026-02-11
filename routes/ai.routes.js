@@ -9,6 +9,12 @@ import {
   performFraudCheck,
   analyzeReviewSentiment,
   getAIDashboard,
+  getMyRecommendations,
+  checkAIHealth,
+  chatBookingSupport,
+  clearBookingSupportHistory,
+  checkBookingSupportHealth,
+  getBookingSupportStats,
 } from "../controller/ai.controller.js";
 import {
   createReview,
@@ -25,66 +31,104 @@ import {
   getEventSentimentAnalysis,
 } from "../controller/Event.controller.js";
 import { authenticateUser } from "../middleware/authMiddleware.js";
-import { protectAdmin } from "../middleware/adminMiddleware.js"; // ✅ Use correct export name
+import { protectAdmin } from "../middleware/adminMiddleware.js";
 
 const router = express.Router();
 
-// AI AGENT ROUTES (Admin only)
+router.get("/health", checkAIHealth);
+
+// ============================================================================
+// AI AGENT MANAGEMENT ROUTES (Admin Only)
+// ============================================================================
+
 router.post("/agents", authenticateUser, protectAdmin, createAgent);
 router.get("/agents", authenticateUser, protectAdmin, getAgents);
 
+// ============================================================================
 // AI RECOMMENDATION ROUTES
-// Get recommendations for a specific user
+// ============================================================================
+
 router.get(
   "/recommendations/user/:userId",
   authenticateUser,
   getUserRecommendations
 );
-// Create a new recommendation
-router.post("/recommendations", authenticateUser, createRecommendation);
-// Get AI recommended events for current user
 router.get("/recommendations/me", authenticateUser, getAIRecommendedEvents);
-// Generate recommendations (for AI service)
+router.post("/recommendations", authenticateUser, createRecommendation);
 router.post(
   "/recommendations/generate",
   authenticateUser,
   generateEventRecommendations
 );
 
+// ============================================================================
+// BOOKING SUPPORT AGENT ROUTES
+// ============================================================================
+
+router.post("/booking-support/chat", authenticateUser, chatBookingSupport);
+router.post("/booking-support/chat-anonymous", chatBookingSupport);
+router.post(
+  "/booking-support/clear-history",
+  authenticateUser,
+  clearBookingSupportHistory
+);
+router.get("/booking-support/health", checkBookingSupportHealth);
+router.get(
+  "/booking-support/stats",
+  authenticateUser,
+  protectAdmin,
+  getBookingSupportStats
+);
+
+// ============================================================================
 // AI NEGOTIATION ROUTES
+// ============================================================================
+
 router.post("/negotiations", authenticateUser, createNegotiation);
 router.put("/negotiations/:id", authenticateUser, updateNegotiation);
 
-// AI FRAUD CHECK ROUTES (Admin only)
+// ============================================================================
+// AI FRAUD CHECK ROUTES (Admin Only)
+// ============================================================================
+
 router.post(
   "/fraud-check/:bookingId",
   authenticateUser,
   protectAdmin,
   performFraudCheck
 );
-// Get fraud risk for a booking
+
 router.get("/fraud-check/booking/:id", authenticateUser, getBookingFraudRisk);
 
+// ============================================================================
 // AI SENTIMENT ANALYSIS ROUTES
+// ============================================================================
+
 router.post(
   "/sentiment-analysis/:reviewId",
   authenticateUser,
   protectAdmin,
   analyzeReviewSentiment
 );
-// Get sentiment analysis for an event
+
 router.get(
   "/sentiment-analysis/event/:id",
   authenticateUser,
   getEventSentimentAnalysis
 );
 
+// ============================================================================
 // REVIEW ROUTES (with AI integration)
+// ============================================================================
+
 router.post("/reviews", authenticateUser, createReview);
 router.get("/reviews/event/:eventId", getEventReviews);
 router.get("/reviews/me", authenticateUser, getUserReviews);
 
+// ============================================================================
 // BOOKING AI DATA ROUTES
+// ============================================================================
+
 router.get(
   "/bookings/:id/insights",
   authenticateUser,
@@ -92,7 +136,10 @@ router.get(
 );
 router.get("/bookings/:id/fraud-risk", authenticateUser, getBookingFraudRisk);
 
-// AI DASHBOARD (Admin only)
+// ============================================================================
+// AI DASHBOARD (Admin Only)
+// ============================================================================
+
 router.get("/dashboard", authenticateUser, protectAdmin, getAIDashboard);
 
 export default router;
