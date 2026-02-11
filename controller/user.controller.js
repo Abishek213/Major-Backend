@@ -19,7 +19,8 @@ export const signup = async (req, res) => {
         if (userExist) {
             return res.status(400).json({ message: "User already exists" });
         }
-
+        
+        
         // Find role by name
         const foundRole = await Role.findOne({ role_Name: role });
         if (!foundRole) {
@@ -38,10 +39,21 @@ export const signup = async (req, res) => {
             role: foundRole._id,
         });
         await createdUser.save();
+        
+
+         const token = jwt.sign(
+            {
+                userId: createdUser._id,
+                role: foundRole.role_Name
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: "1d" }
+        );
 
         // Respond with user details and role_Name
         res.status(201).json({
             message: "User created successfully",
+            token,
             user: {
                 _id: createdUser._id,
                 fullname: createdUser.fullname,
