@@ -13,6 +13,7 @@ import seedEvents from "./seeders/eventSeeder.js";
 import seedCategories from "./seeders/categorieSeeder.js";
 import seedRolePermissions from "./seeders/rolePermissionSeeder.js";
 import seedAIAgents from "./seeders/aiSeeder.js";
+// import seedAIPlanner from "./seeders/aiplannerSeeder.js";
 
 import eventRoutes from "./routes/Event.routes.js";
 import userRoute from "./routes/user.route.js";
@@ -91,6 +92,7 @@ const connectDB = async () => {
       await seedEvents();
       await seedRolePermissions();
       await seedAIAgents();
+      // await seedAIPlanner();
 
       console.log("Database seeding completed.");
     } else {
