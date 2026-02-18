@@ -10,7 +10,6 @@ class AIService {
     this.aiAgentUrl = process.env.AI_AGENT_URL || "http://localhost:3002";
   }
 
-  // ---------- Private helper for axios requests ----------
   async _request(method, path, data = null, options = {}) {
     try {
       const response = await axios({
@@ -34,7 +33,6 @@ class AIService {
     }
   }
 
-  // ---------- Recommendation Methods ----------
   async _buildUserContext(userId) {
     const { default: User } = await import("../model/user.schema.js");
     const user = await User.findById(userId)
@@ -214,7 +212,7 @@ class AIService {
 
   async checkAIHealth() {
     try {
-      const response = await axios.get(`${this.aiAgentUrl}/api/health`, {
+      const response = await axios.get(`${this.aiAgentUrl}/api/agents/health`, {
         timeout: 3000,
       });
       return {
@@ -232,7 +230,6 @@ class AIService {
     }
   }
 
-  // ---------- Booking Support Methods ----------
   async chatBookingSupport(data) {
     console.log(
       `💬 Forwarding chat to AI Agent: ${data.message?.substring(0, 50)}...`
@@ -288,7 +285,6 @@ class AIService {
     return response;
   }
 
-  // ---------- Planning Agent Methods ----------
   async getPlanningSuggestions(eventData) {
     console.log(
       `📡 Calling AI Agent Planning Agent for event: ${eventData.event_name}`
@@ -342,6 +338,268 @@ class AIService {
         url: this.aiAgentUrl,
         timestamp: new Date().toISOString(),
       };
+    }
+  }
+
+  async getDashboardInsights(organizerId, metricsData) {
+    try {
+      console.log(
+        `📊 Requesting dashboard insights for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/insights",
+        {
+          organizerId,
+          metrics: metricsData,
+        },
+        { timeout: 15000 }
+      );
+
+      console.log(`✅ Dashboard insights generated successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard insights error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        fallback: true,
+        insights: {
+          summary: "Unable to generate AI insights at this time",
+          highlights: [],
+          concerns: [],
+          recommendations: [],
+        },
+      };
+    }
+  }
+
+  async answerDashboardQuery(organizerId, query, context = {}) {
+    try {
+      console.log(
+        `❓ Processing dashboard query for ${organizerId}: ${query.substring(
+          0,
+          50
+        )}...`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/query",
+        {
+          organizerId,
+          query,
+          context,
+        },
+        { timeout: 20000 }
+      );
+
+      console.log(`✅ Dashboard query answered successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard query error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        answer:
+          "I apologize, but I encountered an error processing your question. Please try rephrasing or contact support.",
+      };
+    }
+  }
+
+  async getDashboardRecommendations(organizerId, metricsData) {
+    try {
+      console.log(
+        `💡 Generating recommendations for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/recommendations",
+        {
+          organizerId,
+          metrics: metricsData,
+        },
+        { timeout: 15000 }
+      );
+
+      console.log(`✅ Recommendations generated successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard recommendations error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        recommendations: [],
+      };
+    }
+  }
+
+  async initializeDashboardAgent(organizerId) {
+    try {
+      console.log(
+        `🚀 Initializing dashboard agent for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/initialize",
+        { organizerId },
+        { timeout: 10000 }
+      );
+
+      console.log(`✅ Dashboard agent initialized successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard agent initialization error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        message: "Failed to initialize dashboard agent",
+      };
+    }
+  }
+
+  async getDashboardAgent(organizerId = null) {
+    try {
+      // Look for existing dashboard agent
+      let agent = await AI_Agent.findOne({
+        name: "Organizer Dashboard Assistant",
+        agent_type: "organizer",
+        role: "assistant",
+      });
+
+      // Create if doesn't exist
+      if (!agent) {
+        agent = await AI_Agent.create({
+          name: "Organizer Dashboard Assistant",
+          role: "assistant",
+          agent_type: "organizer",
+          user_id: organizerId || null,
+          capabilities: {
+            metrics_aggregation: true,
+            revenue_analysis: true,
+            sentiment_analysis: true,
+            trend_prediction: true,
+            natural_language_query: true,
+            recommendation_generation: true,
+          },
+          status: "active",
+        });
+        console.log("🤖 Created dashboard assistant agent:", agent._id);
+      }
+
+      return agent;
+    } catch (error) {
+      console.error("Get dashboard agent error:", error.message);
+      throw error;
+    }
+  }
+
+  async checkDashboardAgentHealth() {
+    try {
+      const response = await axios.get(
+        `${this.aiAgentUrl}/api/agents/organizer/dashboard/health`,
+        { timeout: 5000 }
+      );
+
+      return {
+        success: true,
+        status: response.data.status || "unknown",
+        ...response.data,
+      };
+    } catch (error) {
+      console.error("Dashboard agent health check error:", error.message);
+      return {
+        success: false,
+        status: "unhealthy",
+        error: error.message,
+        url: this.aiAgentUrl,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  async getDashboardAgentStats(organizerId, timeRange = "30d") {
+    try {
+      const daysBack = timeRange === "7d" ? 7 : timeRange === "90d" ? 90 : 30;
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - daysBack);
+
+      const agent = await this.getDashboardAgent(organizerId);
+
+      const { default: AI_ActionLog } = await import(
+        "../model/ai_actionLog.schema.js"
+      );
+
+      const filter = {
+        agentId: agent._id,
+        logType: {
+          $in: [
+            "dashboard_query",
+            "dashboard_insights",
+            "dashboard_recommendations",
+          ],
+        },
+        createdAt: { $gte: dateFrom },
+      };
+
+      if (organizerId) {
+        filter.userId = organizerId;
+      }
+
+      const [totalQueries, successfulQueries, failedQueries, recentLogs] =
+        await Promise.all([
+          AI_ActionLog.countDocuments(filter),
+          AI_ActionLog.countDocuments({ ...filter, success: true }),
+          AI_ActionLog.countDocuments({ ...filter, success: false }),
+          AI_ActionLog.find(filter)
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .select("logType actionDetails success createdAt"),
+        ]);
+
+      const queryTypes = await AI_ActionLog.aggregate([
+        { $match: filter },
+        { $group: { _id: "$logType", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]);
+
+      return {
+        success: true,
+        agent: {
+          id: agent._id,
+          name: agent.name,
+          status: agent.status,
+          type: agent.agent_type,
+        },
+        summary: {
+          total_queries: totalQueries,
+          successful: successfulQueries,
+          failed: failedQueries,
+          success_rate:
+            totalQueries > 0
+              ? ((successfulQueries / totalQueries) * 100).toFixed(1)
+              : "0.0",
+          time_range: timeRange,
+          period_start: dateFrom.toISOString(),
+          period_end: new Date().toISOString(),
+        },
+        query_types: queryTypes.map((qt) => ({
+          type: qt._id,
+          count: qt.count,
+        })),
+        recent_activity: recentLogs.map((log) => ({
+          type: log.logType,
+          details: log.actionDetails,
+          success: log.success,
+          timestamp: log.createdAt,
+        })),
+      };
+    } catch (error) {
+      console.error("Dashboard agent stats error:", error.message);
+      throw error;
     }
   }
 }

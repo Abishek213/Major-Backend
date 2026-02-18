@@ -9,7 +9,6 @@ import {
   performFraudCheck,
   analyzeReviewSentiment,
   getAIDashboard,
-  getMyRecommendations,
   checkAIHealth,
   chatBookingSupport,
   clearBookingSupportHistory,
@@ -19,6 +18,13 @@ import {
   getEventPlanningSuggestions,
   checkPlanningAgentHealth,
   getPlanningAgentStats,
+  getOrganizerDashboardMetrics,
+  getOrganizerEventMetrics,
+  getOrganizerRevenueMetrics,
+  getOrganizerBookingMetrics,
+  getOrganizerRatingMetrics,
+  getOrganizerSentimentMetrics,
+  getOrganizerTrendsMetrics,
 } from "../controller/ai.controller.js";
 import {
   createReview,
@@ -37,19 +43,20 @@ import {
 import { authenticateUser } from "../middleware/authMiddleware.js";
 import { protectAdmin } from "../middleware/adminMiddleware.js";
 import { verifyOrganizer } from "../middleware/verifyOrganizer.js";
+import { verifyDashboardAccess } from "../middleware/verifyDashboardAccess.js";
 
 const router = express.Router();
 
 router.get("/health", checkAIHealth);
 
 // ============================================================================
-// AI AGENT MANAGEMENT ROUTES (Admin Only)
+// AI AGENT MANAGEMENT ROUTES
 // ============================================================================
 router.post("/agents", authenticateUser, protectAdmin, createAgent);
 router.get("/agents", authenticateUser, protectAdmin, getAgents);
 
 // ============================================================================
-// AI RECOMMENDATION ROUTES
+// User AI RECOMMENDATION ROUTES
 // ============================================================================
 router.get(
   "/recommendations/user/:userId",
@@ -65,7 +72,7 @@ router.post(
 );
 
 // ============================================================================
-// BOOKING SUPPORT AGENT ROUTES
+// User BOOKING SUPPORT AGENT ROUTES
 // ============================================================================
 router.post("/booking-support/chat", authenticateUser, chatBookingSupport);
 router.post("/booking-support/chat-anonymous", chatBookingSupport);
@@ -105,7 +112,53 @@ router.get(
 );
 
 // ============================================================================
-// AI NEGOTIATION ROUTES
+// ORGANIZER DASHBOARD ASSISTANT ROUTES
+// ============================================================================
+router.get(
+  "/dashboard/metrics/:organizerId",
+  authenticateUser,
+  verifyDashboardAccess,
+  getOrganizerDashboardMetrics
+);
+router.get(
+  "/dashboard/events/:organizerId",
+  authenticateUser,
+  verifyDashboardAccess,
+  getOrganizerEventMetrics
+);
+router.get(
+  "/dashboard/revenue/:organizerId",
+  authenticateUser,
+  verifyDashboardAccess,
+  getOrganizerRevenueMetrics
+);
+router.get(
+  "/dashboard/bookings/:organizerId",
+  authenticateUser,
+  verifyDashboardAccess,
+  getOrganizerBookingMetrics
+);
+router.get(
+  "/dashboard/ratings/:organizerId",
+  authenticateUser,
+  verifyDashboardAccess,
+  getOrganizerRatingMetrics
+);
+router.get(
+  "/dashboard/sentiment/:organizerId",
+  authenticateUser,
+  verifyDashboardAccess,
+  getOrganizerSentimentMetrics
+);
+router.get(
+  "/dashboard/trends/:organizerId",
+  authenticateUser,
+  verifyDashboardAccess,
+  getOrganizerTrendsMetrics
+);
+
+// ============================================================================
+// NEGOTIATION ROUTES
 // ============================================================================
 router.post("/negotiations", authenticateUser, createNegotiation);
 router.put("/negotiations/:id", authenticateUser, updateNegotiation);
