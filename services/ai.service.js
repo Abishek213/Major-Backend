@@ -5,80 +5,64 @@ import Event from "../model/event.schema.js";
 import Booking from "../model/booking.schema.js";
 import Review from "../model/review.schema.js";
 
-/**
- * ============================================================================
- * AI SERVICE - BACKEND INTEGRATION LAYER
- * ============================================================================
- *
- * This service acts as the integration layer between Backend and AI Agent Service
- *
- * RESPONSIBILITIES:
- * - Build user context from database
- * - Fetch candidate events
- * - Call AI Agent Service endpoints
- * - Cache recommendations
- * - Provide fallback data
- * - Health monitoring
- *
- * ============================================================================
- */
-
 class AIService {
   constructor() {
     this.aiAgentUrl = process.env.AI_AGENT_URL || "http://localhost:3002";
   }
 
-  // ============================================================================
-  // EVENT RECOMMENDATION METHODS
-  // ============================================================================
+  async _request(method, path, data = null, options = {}) {
+    try {
+      const response = await axios({
+        method,
+        url: `${this.aiAgentUrl}${path}`,
+        data,
+        timeout: options.timeout || 10000,
+        headers: { "Content-Type": "application/json", ...options.headers },
+      });
+      return response.data;
+    } catch (error) {
+      console.error(
+        `AI Agent request failed: ${method} ${path}`,
+        error.message
+      );
+      throw new Error(
+        error.response?.data?.message ||
+          error.message ||
+          "AI Agent request failed"
+      );
+    }
+  }
 
-  /**
-   * Assembles the full user context from DB before sending to AI Agent.
-   * The AI Agent has no DB access — it can only score what we give it.
-   */
   async _buildUserContext(userId) {
-    // 1. Fetch user's wishlist events (populate full event docs)
-    // We import User dynamically to avoid circular dependency issues
     const { default: User } = await import("../model/user.schema.js");
     const user = await User.findById(userId)
       .populate({
         path: "wishlist",
-        populate: {
-          path: "category",
-          select: "category_Name",
-        },
+        populate: { path: "category", select: "category_Name" },
       })
       .select("wishlist")
       .lean();
 
     const wishlistEvents = user?.wishlist || [];
 
-    // 2. Fetch events the user has actually booked (strongest signal)
     const bookings = await Booking.find({ userId })
       .populate({
         path: "eventId",
         select:
           "event_name category tags price location event_date attendees totalSlots",
-        populate: {
-          path: "category",
-          select: "category_Name",
-        },
+        populate: { path: "category", select: "category_Name" },
       })
       .select("eventId")
       .lean();
 
     const bookedEvents = bookings.map((b) => b.eventId).filter(Boolean);
 
-    // 3. Fetch events the user has reviewed (confirms engagement)
     const reviews = await Review.find({ userId })
       .populate({
         path: "eventId",
         select:
           "event_name category tags price location event_date attendees totalSlots",
-        populate: {
-          path: "category",
-          select: "category_Name",
-        },
+        populate: { path: "category", select: "category_Name" },
       })
       .select("eventId rating")
       .lean();
@@ -90,16 +74,12 @@ class AIService {
     return { wishlistEvents, bookedEvents, reviewedEvents };
   }
 
-  /**
-   * Fetches eligible candidate events the AI can score against.
-   * Filters out events that are not bookable.
-   */
   async _fetchCandidateEvents() {
     return Event.find({
       status: { $in: ["upcoming", "approved"] },
       registrationDeadline: { $gt: new Date() },
       isPublic: true,
-      $expr: { $lt: [{ $size: "$attendees" }, "$totalSlots"] }, // not full
+      $expr: { $lt: [{ $size: "$attendees" }, "$totalSlots"] },
     })
       .populate("category", "category_Name")
       .select(
@@ -108,13 +88,8 @@ class AIService {
       .lean();
   }
 
-  /**
-   * Calls the AI Agent with assembled context + candidate events.
-   * AI Agent returns scored & ranked recommendations.
-   */
   async getAIRecommendations(userId, limit = 10) {
     try {
-      // Build what the AI Agent needs — it cannot query our DB
       const userContext = await this._buildUserContext(userId);
       const candidateEvents = await this._fetchCandidateEvents();
 
@@ -122,9 +97,9 @@ class AIService {
         `📡 Calling AI Agent | candidates: ${candidateEvents.length} | wishlist: ${userContext.wishlistEvents.length} | booked: ${userContext.bookedEvents.length}`
       );
 
-      // ✅ FIXED: Changed from /api/recommendations to /api/agents/user/recommendations
-      const response = await axios.post(
-        `${this.aiAgentUrl}/api/agents/user/recommendations`,
+      const response = await this._request(
+        "post",
+        "/api/agents/user/recommendations",
         {
           userId,
           limit,
@@ -134,72 +109,48 @@ class AIService {
         { timeout: 8000 }
       );
 
-      return response.data.success ? response.data.recommendations : [];
+      return response.success ? response.recommendations : [];
     } catch (error) {
       console.error("AI Agent call failed:", error.message);
       return [];
     }
   }
 
-  /**
-   * Finds or creates the shared recommendation agent.
-   */
   async getRecommendationAgent() {
-    try {
-      let agent = await AI_Agent.findOne({
+    let agent = await AI_Agent.findOne({
+      name: "Event Recommendation Agent",
+      agent_type: "admin",
+    });
+    if (!agent) {
+      agent = await AI_Agent.create({
         name: "Event Recommendation Agent",
+        role: "assistant",
         agent_type: "admin",
+        capabilities: ["event_recommendation", "user_behavior_analysis"],
+        status: "active",
       });
-
-      if (!agent) {
-        agent = await AI_Agent.create({
-          name: "Event Recommendation Agent",
-          role: "assistant",
-          agent_type: "admin",
-          capabilities: ["event_recommendation", "user_behavior_analysis"],
-          status: "active",
-        });
-        console.log("🤖 Created recommendation agent:", agent._id);
-      }
-
-      return agent;
-    } catch (error) {
-      console.error("Agent error:", error.message);
-      throw error;
+      console.log("🤖 Created recommendation agent:", agent._id);
     }
+    return agent;
   }
 
-  /**
-   * Persists recommendations returned by the AI Agent.
-   */
   async storeRecommendations(userId, recommendations, agentId) {
-    try {
-      if (!recommendations.length) return [];
-
-      const docs = recommendations.map((rec) => ({
-        user_id: userId,
-        event_id: rec.event_id,
-        agent_id: agentId,
-        confidence_score: rec.confidence_score,
-        recommendation_reason: rec.recommendation_reason,
-      }));
-
-      const saved = await AI_Recommendation.insertMany(docs);
-      console.log(`💾 Stored ${saved.length} recommendations`);
-      return saved;
-    } catch (error) {
-      console.error("Storage error:", error.message);
-      return [];
-    }
+    if (!recommendations.length) return [];
+    const docs = recommendations.map((rec) => ({
+      user_id: userId,
+      event_id: rec.event_id,
+      agent_id: agentId,
+      confidence_score: rec.confidence_score,
+      recommendation_reason: rec.recommendation_reason,
+    }));
+    const saved = await AI_Recommendation.insertMany(docs);
+    console.log(`💾 Stored ${saved.length} recommendations`);
+    return saved;
   }
 
-  /**
-   * Returns cached recommendations from the last 24 hours.
-   */
   async getCachedRecommendations(userId, limit) {
     try {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
       const cached = await AI_Recommendation.find({
         user_id: userId,
         createdAt: { $gte: oneDayAgo },
@@ -226,10 +177,6 @@ class AIService {
     }
   }
 
-  /**
-   * Fallback: returns popular upcoming events when the AI Agent
-   * is down or returns empty.
-   */
   async getFallbackRecommendations(userId, limit = 10) {
     try {
       const events = await Event.find({
@@ -263,15 +210,11 @@ class AIService {
     }
   }
 
-  /**
-   * Health check against the AI Agent microservice.
-   */
   async checkAIHealth() {
     try {
-      const response = await axios.get(`${this.aiAgentUrl}/api/health`, {
+      const response = await axios.get(`${this.aiAgentUrl}/api/agents/health`, {
         timeout: 3000,
       });
-
       return {
         status: "healthy",
         url: this.aiAgentUrl,
@@ -287,91 +230,38 @@ class AIService {
     }
   }
 
-  // ============================================================================
-  // BOOKING SUPPORT AGENT METHODS
-  // ============================================================================
-
-  /**
-   * Chat with booking support agent
-   * Forwards chat request to AI Agent Service
-   *
-   * @param {Object} data - { message, userId, sessionId }
-   * @returns {Promise<Object>} AI response with message and metadata
-   */
   async chatBookingSupport(data) {
-    try {
-      console.log(
-        `💬 Forwarding chat to AI Agent: ${data.message?.substring(0, 50)}...`
-      );
-
-      const response = await axios.post(
-        `${this.aiAgentUrl}/api/agents/user/booking-support/chat`,
-        data,
-        {
-          timeout: 30000, // 30 second timeout (AI processing can take time)
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      console.log(`✅ AI Agent responded successfully`);
-      return response.data;
-    } catch (error) {
-      console.error("Booking support chat error:", error.message);
-
-      // Return error in expected format
-      throw new Error(
-        error.response?.data?.message ||
-          error.message ||
-          "Failed to communicate with booking support agent"
-      );
-    }
+    console.log(
+      `💬 Forwarding chat to AI Agent: ${data.message?.substring(0, 50)}...`
+    );
+    const response = await this._request(
+      "post",
+      "/api/agents/user/booking-support/chat",
+      data,
+      { timeout: 30000 }
+    );
+    console.log(`✅ AI Agent responded successfully`);
+    return response;
   }
 
-  /**
-   * Clear conversation history for a user
-   *
-   * @param {Object} data - { userId, sessionId }
-   * @returns {Promise<Object>} Success response
-   */
   async clearBookingSupportHistory(data) {
-    try {
-      console.log(`🗑️ Clearing history for: ${data.userId || data.sessionId}`);
-
-      const response = await axios.post(
-        `${this.aiAgentUrl}/api/agents/user/booking-support/clear-history`,
-        data,
-        {
-          timeout: 5000,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      console.log(`✅ History cleared successfully`);
-      return response.data;
-    } catch (error) {
-      console.error("Clear history error:", error.message);
-      throw new Error(
-        error.response?.data?.message || "Failed to clear conversation history"
-      );
-    }
+    console.log(`🗑️ Clearing history for: ${data.userId || data.sessionId}`);
+    const response = await this._request(
+      "post",
+      "/api/agents/user/booking-support/clear-history",
+      data,
+      { timeout: 5000 }
+    );
+    console.log(`✅ History cleared successfully`);
+    return response;
   }
 
-  /**
-   * Check booking support agent health
-   *
-   * @returns {Promise<Object>} Health status with component details
-   */
   async checkBookingSupportHealth() {
     try {
       const response = await axios.get(
         `${this.aiAgentUrl}/api/agents/user/booking-support/health`,
         { timeout: 5000 }
       );
-
       return response.data;
     } catch (error) {
       console.error("Booking support health check error:", error.message);
@@ -385,26 +275,331 @@ class AIService {
     }
   }
 
-  /**
-   * Get booking support agent statistics
-   * Useful for monitoring dashboards
-   *
-   * @returns {Promise<Object>} Agent stats including sessions, performance, etc.
-   */
   async getBookingSupportStats() {
+    const response = await this._request(
+      "get",
+      "/api/agents/user/booking-support/stats",
+      null,
+      { timeout: 5000 }
+    );
+    return response;
+  }
+
+  async getPlanningSuggestions(eventData) {
+    console.log(
+      `📡 Calling AI Agent Planning Agent for event: ${eventData.event_name}`
+    );
+    const response = await this._request(
+      "post",
+      "/api/agents/organizer/planning/suggest",
+      eventData,
+      { timeout: 10000 }
+    );
+    console.log(`✅ AI Agent planning suggestions received`);
+    return response;
+  }
+
+  async checkPlanningAgentHealth() {
+    try {
+      const response = await axios.get(`${this.aiAgentUrl}/api/agents/health`, {
+        timeout: 5000,
+      });
+
+      const healthData = response.data;
+
+      const planningStatus =
+        healthData.components?.planning ||
+        healthData.agents?.find((a) => a.name === "planning-agent")?.status ||
+        "unknown";
+
+      return {
+        success: true,
+        status: planningStatus === "ready" ? "active" : "inactive",
+        agentStatus: planningStatus,
+        name: "planning-agent",
+        type: "organizer",
+        capabilities: [
+          "price_optimization",
+          "tag_recommendation",
+          "slot_suggestion",
+          "datetime_optimization",
+          "deadline_validation",
+        ],
+        llmProvider: process.env.LLM_PROVIDER || "ollama",
+        llmStatus: planningStatus === "ready" ? "ready" : "initializing",
+        fullHealthCheck: healthData,
+      };
+    } catch (error) {
+      console.error("Planning agent health check error:", error.message);
+      return {
+        success: false,
+        status: "inactive",
+        error: error.message,
+        url: this.aiAgentUrl,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  async getDashboardInsights(organizerId, metricsData) {
+    try {
+      console.log(
+        `📊 Requesting dashboard insights for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/insights",
+        {
+          organizerId,
+          metrics: metricsData,
+        },
+        { timeout: 15000 }
+      );
+
+      console.log(`✅ Dashboard insights generated successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard insights error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        fallback: true,
+        insights: {
+          summary: "Unable to generate AI insights at this time",
+          highlights: [],
+          concerns: [],
+          recommendations: [],
+        },
+      };
+    }
+  }
+
+  async answerDashboardQuery(organizerId, query, context = {}) {
+    try {
+      console.log(
+        `❓ Processing dashboard query for ${organizerId}: ${query.substring(
+          0,
+          50
+        )}...`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/query",
+        {
+          organizerId,
+          query,
+          context,
+        },
+        { timeout: 20000 }
+      );
+
+      console.log(`✅ Dashboard query answered successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard query error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        answer:
+          "I apologize, but I encountered an error processing your question. Please try rephrasing or contact support.",
+      };
+    }
+  }
+
+  async getDashboardRecommendations(organizerId, metricsData) {
+    try {
+      console.log(
+        `💡 Generating recommendations for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/recommendations",
+        {
+          organizerId,
+          metrics: metricsData,
+        },
+        { timeout: 15000 }
+      );
+
+      console.log(`✅ Recommendations generated successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard recommendations error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        recommendations: [],
+      };
+    }
+  }
+
+  async initializeDashboardAgent(organizerId) {
+    try {
+      console.log(
+        `🚀 Initializing dashboard agent for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/initialize",
+        { organizerId },
+        { timeout: 10000 }
+      );
+
+      console.log(`✅ Dashboard agent initialized successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard agent initialization error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        message: "Failed to initialize dashboard agent",
+      };
+    }
+  }
+
+  async getDashboardAgent(organizerId = null) {
+    try {
+      // Look for existing dashboard agent
+      let agent = await AI_Agent.findOne({
+        name: "Organizer Dashboard Assistant",
+        agent_type: "organizer",
+        role: "assistant",
+      });
+
+      // Create if doesn't exist
+      if (!agent) {
+        agent = await AI_Agent.create({
+          name: "Organizer Dashboard Assistant",
+          role: "assistant",
+          agent_type: "organizer",
+          user_id: organizerId || null,
+          capabilities: {
+            metrics_aggregation: true,
+            revenue_analysis: true,
+            sentiment_analysis: true,
+            trend_prediction: true,
+            natural_language_query: true,
+            recommendation_generation: true,
+          },
+          status: "active",
+        });
+        console.log("🤖 Created dashboard assistant agent:", agent._id);
+      }
+
+      return agent;
+    } catch (error) {
+      console.error("Get dashboard agent error:", error.message);
+      throw error;
+    }
+  }
+
+  async checkDashboardAgentHealth() {
     try {
       const response = await axios.get(
-        `${this.aiAgentUrl}/api/agents/user/booking-support/stats`,
+        `${this.aiAgentUrl}/api/agents/organizer/dashboard/health`,
         { timeout: 5000 }
       );
 
-      return response.data;
+      return {
+        success: true,
+        status: response.data.status || "unknown",
+        ...response.data,
+      };
     } catch (error) {
-      console.error("Booking support stats error:", error.message);
-      throw new Error(
-        error.response?.data?.message ||
-          "Failed to get booking support statistics"
+      console.error("Dashboard agent health check error:", error.message);
+      return {
+        success: false,
+        status: "unhealthy",
+        error: error.message,
+        url: this.aiAgentUrl,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  async getDashboardAgentStats(organizerId, timeRange = "30d") {
+    try {
+      const daysBack = timeRange === "7d" ? 7 : timeRange === "90d" ? 90 : 30;
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - daysBack);
+
+      const agent = await this.getDashboardAgent(organizerId);
+
+      const { default: AI_ActionLog } = await import(
+        "../model/ai_actionLog.schema.js"
       );
+
+      const filter = {
+        agentId: agent._id,
+        logType: {
+          $in: [
+            "dashboard_query",
+            "dashboard_insights",
+            "dashboard_recommendations",
+          ],
+        },
+        createdAt: { $gte: dateFrom },
+      };
+
+      if (organizerId) {
+        filter.userId = organizerId;
+      }
+
+      const [totalQueries, successfulQueries, failedQueries, recentLogs] =
+        await Promise.all([
+          AI_ActionLog.countDocuments(filter),
+          AI_ActionLog.countDocuments({ ...filter, success: true }),
+          AI_ActionLog.countDocuments({ ...filter, success: false }),
+          AI_ActionLog.find(filter)
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .select("logType actionDetails success createdAt"),
+        ]);
+
+      const queryTypes = await AI_ActionLog.aggregate([
+        { $match: filter },
+        { $group: { _id: "$logType", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]);
+
+      return {
+        success: true,
+        agent: {
+          id: agent._id,
+          name: agent.name,
+          status: agent.status,
+          type: agent.agent_type,
+        },
+        summary: {
+          total_queries: totalQueries,
+          successful: successfulQueries,
+          failed: failedQueries,
+          success_rate:
+            totalQueries > 0
+              ? ((successfulQueries / totalQueries) * 100).toFixed(1)
+              : "0.0",
+          time_range: timeRange,
+          period_start: dateFrom.toISOString(),
+          period_end: new Date().toISOString(),
+        },
+        query_types: queryTypes.map((qt) => ({
+          type: qt._id,
+          count: qt.count,
+        })),
+        recent_activity: recentLogs.map((log) => ({
+          type: log.logType,
+          details: log.actionDetails,
+          success: log.success,
+          timestamp: log.createdAt,
+        })),
+      };
+    } catch (error) {
+      console.error("Dashboard agent stats error:", error.message);
+      throw error;
     }
   }
 }

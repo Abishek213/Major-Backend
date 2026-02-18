@@ -11,7 +11,7 @@ const aiAgentSchema = new mongoose.Schema(
     role: {
       type: String,
       required: true,
-      enum: ["assistant", "analyst", "moderator", "negotiator"],
+      enum: ["assistant", "analyst", "moderator", "negotiator", "planner"],
     },
     capabilities: {
       type: mongoose.Schema.Types.Mixed,
