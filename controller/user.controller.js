@@ -7,7 +7,7 @@ import fs from 'fs';
 
 export const signup = async (req, res) => {
     try {
-        const { fullname, email, password, role, contactNo } = req.body;
+        const { fullname, email, password, role, contactNo,organizerDetails  } = req.body;
 
         // Validate input
         if (!fullname || !email || !password || !role || !contactNo) {
@@ -37,6 +37,7 @@ export const signup = async (req, res) => {
             password: hashedPassword,
             contactNo,
             role: foundRole._id,
+            organizerDetails: role === 'Organizer' ? organizerDetails : {}
         });
         await createdUser.save();
         
