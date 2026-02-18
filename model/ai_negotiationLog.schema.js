@@ -5,8 +5,15 @@ const aiNegotiationLogSchema = new mongoose.Schema(
     booking_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Booking",
+      required: false,
+    },
+
+      eventRequest_id: {  
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EventRequest",
       required: true,
     },
+
     agent_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "AI_Agent",
@@ -15,7 +22,7 @@ const aiNegotiationLogSchema = new mongoose.Schema(
     negotiation_type: {
       type: String,
       required: true,
-      enum: ["price", "dates", "venue", "terms"],
+      enum: ["price", "dates", "venue", "terms", "event_request"],
     },
     initial_offer: {
       type: Number,
@@ -30,8 +37,29 @@ const aiNegotiationLogSchema = new mongoose.Schema(
       type: String,
       required: true,
       default: "pending",
-      enum: ["pending", "accepted", "rejected", "cancelled"],
+      enum: ["pending", "accepted", "rejected", "cancelled","countered", "expired"],
     },
+
+    negotiation_round: {
+      type: Number,
+      default: 1,
+    },
+
+    negotiation_history: [
+      {
+        round: Number,
+        offer: Number,
+        party: { type: String, enum: ["user", "organizer", "ai"] },
+        message: String,
+        timestamp: { type: Date, default: Date.now }
+      }
+    ],
+
+     metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    }
+
   },
   {
     timestamps: true,
@@ -39,6 +67,7 @@ const aiNegotiationLogSchema = new mongoose.Schema(
 );
 
 // Indexes
+aiNegotiationLogSchema.index({ eventRequest_id: 1, createdAt: -1 });
 aiNegotiationLogSchema.index({ booking_id: 1 });
 aiNegotiationLogSchema.index({ agent_id: 1, createdAt: -1 });
 

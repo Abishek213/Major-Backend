@@ -5,6 +5,7 @@ import { wsManager } from '../webSocket.js';
 import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import axios from 'axios'; // NEW: For AI service communication
+// import User from '../model/user.schema.js'; // NEW: For fetching organizer details in AI suggestions
 // In eventrequest.controller.js - You're using AIEventRequestService but not importing it
 // ADD THIS at the top:
 // import AIEventRequestService from '../services/ai-event-request.service.js';
@@ -18,7 +19,7 @@ const createResponse = (success, message, data = null, error = null) => ({
 
 
 // ========== AI SERVICE CONFIGURATION ========== // NEW SECTION
-const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3001/api';
+const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3002/api';
 const AI_ENABLED = process.env.AI_ENABLED === 'true';
 
 
@@ -42,6 +43,7 @@ const callAIAgent = async (requestData, userId, naturalLanguage = null) => {
     // Use requestText instead of naturalLanguage to match AI Agent expectations
     const aiRequest = {
       userId: userId.toString(),
+      requestText: naturalLanguage || requestData.description,  // Changed from naturalLanguage to requestText
        naturalLanguage: naturalLanguage || requestData.description,  // Changed from naturalLanguage to requestText
       // structuredData: {
       //   eventType: requestData.eventType,
@@ -56,16 +58,16 @@ const callAIAgent = async (requestData, userId, naturalLanguage = null) => {
 console.log('🔍 Sending natural language to AI:', 
       aiRequest.naturalLanguage.substring(0, 100) + '...');   
 
-    console.log('🔍 DEBUG - URL:', `${AI_AGENT_URL}/api/ai/process-event-request`);
+    console.log('🔍 DEBUG - URL:', `${AI_AGENT_URL}/api/agents/process-event-request`);
 
     const response = await axios.post(
-      `${AI_AGENT_URL}/api/ai/process-event-request`,
+      `${AI_AGENT_URL}/api/agents/process-event-request`,
         aiRequest,
       {
         headers: {
           'Content-Type': 'application/json'
         },
-        timeout: 30000
+        timeout: 60000
 
 
       }
@@ -105,7 +107,7 @@ const fetchAISuggestedOrganizers = async (eventData) => {
 
   try {
     const response = await axios.get(
-      `${AI_AGENT_URL}/api/ai/event-suggestions`,
+      `${AI_AGENT_URL}/api/agents/event-suggestions`,
       {
         params: {
           eventType: eventData.eventType,
@@ -134,6 +136,9 @@ export const createEventRequest = async (req, res) => {
   try {
 
     const { useAI = false, naturalLanguage = null } = req.body;
+
+        console.log('Creating event request with useAI:', useAI);
+
     // 1. Create Event Request
     const eventRequest = await new EventRequest({
       ...req.body,
@@ -440,6 +445,161 @@ export const reprocessWithAI = async (req, res) => {
     ));
   }
 };
+
+
+// org matching
+export const searchOrganizersForAI = async (req, res) => {
+  try {
+    const { eventType, location, budget } = req.query;
+    
+    console.log('🔍 AI Service searching organizers:', { eventType, location, budget });
+    
+    // Get models safely
+    const Role = mongoose.model('Role');
+    const User = mongoose.model('User');
+    
+    // Find Organizer role
+    const organizerRole = await Role.findOne({ role_Name: 'Organizer' }).lean();
+    
+    if (!organizerRole) {
+      console.log('❌ No organizer role found');
+      return res.status(200).json({
+        success: true,
+        data: [],
+        count: 0,
+        message: 'No organizer role found'
+      });
+    }
+    
+    console.log('✅ Organizer role ID:', organizerRole._id);
+    
+    // SIMPLE QUERY - No complex filters first
+    const organizers = await User.find({ 
+      role: organizerRole._id 
+    })
+    .select('fullname email contactNo profileImage organizerDetails')
+    .limit(20)
+    .lean();
+    
+    console.log(`📊 Found ${organizers.length} total organizers`);
+    
+    if (organizers.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        count: 0,
+        message: 'No organizers found in database'
+      });
+    }
+    
+    // Log first organizer for debugging
+    console.log('📝 Sample organizer:', {
+      name: organizers[0].fullname,
+      hasDetails: !!organizers[0].organizerDetails,
+      expertise: organizers[0].organizerDetails?.expertise,
+      serviceAreas: organizers[0].organizerDetails?.serviceAreas
+    });
+    
+    // Format organizers for AI service
+    const formattedOrganizers = organizers.map(org => {
+      // Safe extraction with defaults
+      const details = org.organizerDetails || {};
+      const serviceAreas = details.serviceAreas || [];
+      const priceRange = details.priceRange || { min: 10000, max: 500000 };
+      
+      return {
+        _id: org._id,
+        id: org._id.toString(),
+        fullname: org.fullname || '',
+        email: org.email || '',
+        contactNo: org.contactNo || '',
+        profileImage: org.profileImage || null,
+        expertise: Array.isArray(details.expertise) ? details.expertise : [],
+        location: serviceAreas[0]?.city || 'Nepal',
+        rating: typeof details.rating === 'number' ? details.rating : 4.0,
+        priceRange: [
+          priceRange.min || 10000,
+          priceRange.max || 500000
+        ],
+        totalEvents: details.totalEvents || 0,
+        responseTime: details.responseTime || '24h',
+        isVerified: details.isVerified || false,
+        businessName: details.businessName || org.fullname,
+        yearsOfExperience: details.yearsOfExperience || 0,
+        serviceAreas: serviceAreas
+      };
+    });
+    
+    // Filter by location if provided (case-insensitive)
+    let filteredOrganizers = formattedOrganizers;
+    if (location) {
+      const locationLower = location.toLowerCase();
+      filteredOrganizers = formattedOrganizers.filter(org => {
+        // Check if any service area matches the location
+        return org.serviceAreas.some(area => 
+          area.city && area.city.toLowerCase().includes(locationLower)
+        );
+      });
+      
+      console.log(`📍 After location filter: ${filteredOrganizers.length} organizers`);
+    }
+    
+    // Filter by event type if provided
+    if (eventType && filteredOrganizers.length > 0) {
+      const eventTypeLower = eventType.toLowerCase();
+      filteredOrganizers = filteredOrganizers.filter(org => 
+        org.expertise.some(exp => 
+          exp.toLowerCase().includes(eventTypeLower) || 
+          eventTypeLower.includes(exp.toLowerCase())
+        )
+      );
+      
+      console.log(`🎯 After expertise filter: ${filteredOrganizers.length} organizers`);
+    }
+    
+    // Filter by budget if provided
+    if (budget && filteredOrganizers.length > 0) {
+      const budgetNum = parseInt(budget);
+      filteredOrganizers = filteredOrganizers.filter(org => {
+        const [min, max] = org.priceRange;
+        // Budget is within range or close to it
+        return budgetNum >= min * 0.7; // At least 70% of minimum
+      });
+      
+      console.log(`💰 After budget filter: ${filteredOrganizers.length} organizers`);
+    }
+    
+    console.log(`✅ Returning ${filteredOrganizers.length} organizers to AI service`);
+    
+    // ALWAYS return valid JSON
+    return res.status(200).json({
+      success: true,
+      data: filteredOrganizers,
+      count: filteredOrganizers.length,
+      debug: {
+        totalFound: organizers.length,
+        filteredCount: filteredOrganizers.length,
+        filters: { eventType, location, budget }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in searchOrganizersForAI:', error);
+    
+    // Return error as valid JSON
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      data: [],
+      count: 0
+    });
+  }
+};
+
+
+
+
+
 
 
 
