@@ -13,8 +13,11 @@ import {
   checkAIHealth,
   chatBookingSupport,
   clearBookingSupportHistory,
+  clearBookingSupportHistoryAnonymous,
   checkBookingSupportHealth,
   getBookingSupportStats,
+  processEventRequest,       // NEW
+  getEventSuggestions,       // NEW
 } from "../controller/ai.controller.js";
 import {
   createReview,
@@ -65,13 +68,25 @@ router.post(
 // BOOKING SUPPORT AGENT ROUTES
 // ============================================================================
 
+// Authenticated chat
 router.post("/booking-support/chat", authenticateUser, chatBookingSupport);
+
+// Anonymous chat (no token required)
 router.post("/booking-support/chat-anonymous", chatBookingSupport);
+
+// Authenticated clear-history
 router.post(
   "/booking-support/clear-history",
   authenticateUser,
   clearBookingSupportHistory
 );
+
+// Anonymous clear-history (no token required)
+router.post(
+  "/booking-support/clear-history-anonymous",
+  clearBookingSupportHistoryAnonymous
+);
+
 router.get("/booking-support/health", checkBookingSupportHealth);
 router.get(
   "/booking-support/stats",
@@ -79,6 +94,19 @@ router.get(
   protectAdmin,
   getBookingSupportStats
 );
+
+// ============================================================================
+// EVENT REQUEST AI ROUTES (NEW)
+// These are called internally by eventrequest.controller.js via AI_AGENT_URL
+// ============================================================================
+
+// Called by eventrequest.controller → callAIAgent()
+// POST /api/ai/process-event-request
+router.post("/process-event-request", processEventRequest);
+
+// Called by eventrequest.controller → fetchAISuggestedOrganizers()
+// GET /api/ai/event-suggestions
+router.get("/event-suggestions", getEventSuggestions);
 
 // ============================================================================
 // AI NEGOTIATION ROUTES

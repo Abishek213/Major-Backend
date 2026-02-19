@@ -9,76 +9,115 @@ import Review from "../model/review.schema.js";
  * ============================================================================
  * AI SERVICE - BACKEND INTEGRATION LAYER
  * ============================================================================
- *
- * This service acts as the integration layer between Backend and AI Agent Service
- *
- * RESPONSIBILITIES:
- * - Build user context from database
- * - Fetch candidate events
- * - Call AI Agent Service endpoints
- * - Cache recommendations
- * - Provide fallback data
- * - Health monitoring
- *
- * ============================================================================
  */
 
 class AIService {
   constructor() {
-    this.aiAgentUrl = process.env.AI_AGENT_URL || "http://localhost:3002";
+    this.aiAgentUrl = process.env.AI_AGENT_SERVICE_URL || "http://localhost:3002"
+
+    // ── Built-in FAQ knowledge base ─────────────────────────────────────────
+    // Used as fallback when the external AI agent is unreachable.
+    // Add / edit entries freely — each entry has keywords and a response.
+    this._faqEntries = [
+      {
+        keywords: ["refund", "money back", "cancel", "cancellation"],
+        response:
+          "Our refund policy allows full refunds up to 48 hours before the event. " +
+          "Cancellations within 48 hours may be eligible for a 50% refund. " +
+          "To request a refund, go to My Bookings → select the booking → click 'Request Refund'. " +
+          "Refunds are processed within 5–7 business days.",
+      },
+      {
+        keywords: ["transfer", "ticket", "give", "friend", "someone else"],
+        response:
+          "You can transfer your ticket to another person up to 24 hours before the event. " +
+          "Go to My Bookings → select the booking → click 'Transfer Ticket' and enter the recipient's email. " +
+          "They will receive a confirmation email with the new ticket.",
+      },
+      {
+        keywords: ["book", "how to book", "register", "sign up", "reserve"],
+        response:
+          "To book an event: (1) Browse events on the homepage or use Search. " +
+          "(2) Click on the event you want. " +
+          "(3) Click 'Book Now' and select the number of tickets. " +
+          "(4) Complete payment. You'll receive a confirmation email with your ticket.",
+      },
+      {
+        keywords: ["payment", "pay", "price", "cost", "fee", "charge"],
+        response:
+          "We accept credit/debit cards, PayPal, and eSewa. " +
+          "Payment is processed securely at checkout. " +
+          "You will receive a receipt via email after successful payment. " +
+          "If a payment failed, please check your bank and try again — you will not be charged twice.",
+      },
+      {
+        keywords: ["contact", "support", "help", "human", "agent", "speak"],
+        response:
+          "You can reach our support team at support@eventa.com or call +977-01-1234567 (Mon–Fri, 9AM–6PM). " +
+          "For urgent issues during an event, use the emergency contact provided in your confirmation email.",
+      },
+      {
+        keywords: ["reschedule", "postpone", "date change", "new date"],
+        response:
+          "If an event is rescheduled by the organizer, you will be notified via email and given the option to keep your booking or request a full refund. " +
+          "If you need to change your attendance date for a multi-day event, contact the organizer directly through the event page.",
+      },
+      {
+        keywords: ["ticket", "where", "find", "download", "qr", "code"],
+        response:
+          "Your ticket is available in My Bookings. You can download it as a PDF or show the QR code directly from the app at the venue. " +
+          "A copy is also sent to your registered email address after booking.",
+      },
+      {
+        keywords: ["account", "login", "password", "forgot", "reset"],
+        response:
+          "To reset your password, click 'Forgot Password' on the login page and enter your email. " +
+          "You will receive a reset link within a few minutes. " +
+          "If you don't see it, check your spam folder or contact support@eventa.com.",
+      },
+      {
+        keywords: ["organizer", "create event", "host", "list event", "publish"],
+        response:
+          "To create an event, register or log in as an organizer. " +
+          "Go to Dashboard → Create Event and fill in the details (name, date, venue, tickets, pricing). " +
+          "Events are reviewed and approved within 24 hours. " +
+          "For organizer onboarding help, email organizers@eventa.com.",
+      },
+    ];
   }
 
   // ============================================================================
   // EVENT RECOMMENDATION METHODS
   // ============================================================================
 
-  /**
-   * Assembles the full user context from DB before sending to AI Agent.
-   * The AI Agent has no DB access — it can only score what we give it.
-   */
   async _buildUserContext(userId) {
-    // 1. Fetch user's wishlist events (populate full event docs)
-    // We import User dynamically to avoid circular dependency issues
     const { default: User } = await import("../model/user.schema.js");
     const user = await User.findById(userId)
       .populate({
         path: "wishlist",
-        populate: {
-          path: "category",
-          select: "category_Name",
-        },
+        populate: { path: "category", select: "category_Name" },
       })
       .select("wishlist")
       .lean();
 
     const wishlistEvents = user?.wishlist || [];
 
-    // 2. Fetch events the user has actually booked (strongest signal)
     const bookings = await Booking.find({ userId })
       .populate({
         path: "eventId",
-        select:
-          "event_name category tags price location event_date attendees totalSlots",
-        populate: {
-          path: "category",
-          select: "category_Name",
-        },
+        select: "event_name category tags price location event_date attendees totalSlots",
+        populate: { path: "category", select: "category_Name" },
       })
       .select("eventId")
       .lean();
 
     const bookedEvents = bookings.map((b) => b.eventId).filter(Boolean);
 
-    // 3. Fetch events the user has reviewed (confirms engagement)
     const reviews = await Review.find({ userId })
       .populate({
         path: "eventId",
-        select:
-          "event_name category tags price location event_date attendees totalSlots",
-        populate: {
-          path: "category",
-          select: "category_Name",
-        },
+        select: "event_name category tags price location event_date attendees totalSlots",
+        populate: { path: "category", select: "category_Name" },
       })
       .select("eventId rating")
       .lean();
@@ -90,16 +129,12 @@ class AIService {
     return { wishlistEvents, bookedEvents, reviewedEvents };
   }
 
-  /**
-   * Fetches eligible candidate events the AI can score against.
-   * Filters out events that are not bookable.
-   */
   async _fetchCandidateEvents() {
     return Event.find({
       status: { $in: ["upcoming", "approved"] },
       registrationDeadline: { $gt: new Date() },
       isPublic: true,
-      $expr: { $lt: [{ $size: "$attendees" }, "$totalSlots"] }, // not full
+      $expr: { $lt: [{ $size: "$attendees" }, "$totalSlots"] },
     })
       .populate("category", "category_Name")
       .select(
@@ -108,13 +143,8 @@ class AIService {
       .lean();
   }
 
-  /**
-   * Calls the AI Agent with assembled context + candidate events.
-   * AI Agent returns scored & ranked recommendations.
-   */
   async getAIRecommendations(userId, limit = 10) {
     try {
-      // Build what the AI Agent needs — it cannot query our DB
       const userContext = await this._buildUserContext(userId);
       const candidateEvents = await this._fetchCandidateEvents();
 
@@ -122,15 +152,9 @@ class AIService {
         `📡 Calling AI Agent | candidates: ${candidateEvents.length} | wishlist: ${userContext.wishlistEvents.length} | booked: ${userContext.bookedEvents.length}`
       );
 
-      // ✅ FIXED: Changed from /api/recommendations to /api/agents/user/recommendations
       const response = await axios.post(
         `${this.aiAgentUrl}/api/agents/user/recommendations`,
-        {
-          userId,
-          limit,
-          userContext,
-          candidateEvents,
-        },
+        { userId, limit, userContext, candidateEvents },
         { timeout: 8000 }
       );
 
@@ -141,9 +165,6 @@ class AIService {
     }
   }
 
-  /**
-   * Finds or creates the shared recommendation agent.
-   */
   async getRecommendationAgent() {
     try {
       let agent = await AI_Agent.findOne({
@@ -169,9 +190,6 @@ class AIService {
     }
   }
 
-  /**
-   * Persists recommendations returned by the AI Agent.
-   */
   async storeRecommendations(userId, recommendations, agentId) {
     try {
       if (!recommendations.length) return [];
@@ -193,9 +211,6 @@ class AIService {
     }
   }
 
-  /**
-   * Returns cached recommendations from the last 24 hours.
-   */
   async getCachedRecommendations(userId, limit) {
     try {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -226,10 +241,6 @@ class AIService {
     }
   }
 
-  /**
-   * Fallback: returns popular upcoming events when the AI Agent
-   * is down or returns empty.
-   */
   async getFallbackRecommendations(userId, limit = 10) {
     try {
       const events = await Event.find({
@@ -263,9 +274,6 @@ class AIService {
     }
   }
 
-  /**
-   * Health check against the AI Agent microservice.
-   */
   async checkAIHealth() {
     try {
       const response = await axios.get(`${this.aiAgentUrl}/api/health`, {
@@ -292,11 +300,81 @@ class AIService {
   // ============================================================================
 
   /**
-   * Chat with booking support agent
-   * Forwards chat request to AI Agent Service
+   * Checks whether an error means the AI agent server is simply unreachable
+   * (not running, wrong port, network issue, timeout).
    *
-   * @param {Object} data - { message, userId, sessionId }
-   * @returns {Promise<Object>} AI response with message and metadata
+   * FIX: Added ECONNABORTED — this is the code axios sets when its own
+   * `timeout` option fires (different from the OS-level ETIMEDOUT).
+   * Without it, axios timeouts were falling through to the rethrow branch,
+   * causing the controller to return a 500 instead of the FAQ fallback.
+   */
+  _isAgentUnavailable(error) {
+    if (!error) return false;
+    const code = error.code || "";
+    const msg = (error.message || "").toLowerCase();
+    return (
+      code === "ECONNREFUSED"  ||  // nothing running on that port
+      code === "ENOTFOUND"     ||  // DNS failure / bad hostname
+      code === "ECONNRESET"    ||  // connection dropped mid-flight
+      code === "ETIMEDOUT"     ||  // OS / TCP-level timeout
+      code === "ECONNABORTED"  ||  // ← axios-level timeout (timeout: N ms)
+      msg.includes("timeout")  ||  // catch-all for timeout phrasing
+      msg.includes("network error")
+    );
+  }
+
+  /**
+   * Simple keyword-based FAQ matcher.
+   * Scans the message against the built-in FAQ knowledge base and
+   * returns the best matching response, or a generic fallback.
+   */
+  _buildFallbackResponse(message) {
+    const lower = (message || "").toLowerCase();
+
+    for (const entry of this._faqEntries) {
+      if (entry.keywords.some((kw) => lower.includes(kw))) {
+        return {
+          success: true,
+          response: entry.response,
+          suggestions: [
+            "How do I book an event?",
+            "What is the refund policy?",
+            "How do I contact support?",
+            "Where can I find my ticket?",
+          ],
+          confidence: 0.75,
+          source: "built_in_faq",
+          timestamp: new Date().toISOString(),
+        };
+      }
+    }
+
+    // Generic fallback when no keywords match
+    return {
+      success: true,
+      response:
+        "Thank you for reaching out! I can help you with bookings, refunds, ticket transfers, payments, and account issues. " +
+        "Could you please describe your question in a bit more detail? " +
+        "You can also reach our support team at support@eventa.com.",
+      suggestions: [
+        "How do I book an event?",
+        "What is the refund policy?",
+        "How do I transfer my ticket?",
+        "How do I contact support?",
+      ],
+      confidence: 0.5,
+      source: "built_in_faq",
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Chat with booking support agent.
+   *
+   * Strategy:
+   *   1. Try the external AI agent (30 s timeout — enough for LLM generation).
+   *   2. If the agent is unreachable / down → answer from built-in FAQ.
+   *   3. Any other unexpected error → rethrow so the controller returns 500.
    */
   async chatBookingSupport(data) {
     try {
@@ -308,19 +386,28 @@ class AIService {
         `${this.aiAgentUrl}/api/agents/user/booking-support/chat`,
         data,
         {
-          timeout: 30000, // 30 second timeout (AI processing can take time)
-          headers: {
-            "Content-Type": "application/json",
-          },
+          // 30s timeout — LLM responses can take 10-25s for complex queries.
+          // ECONNABORTED was firing at 8s, cutting off valid AI responses.
+          timeout: 60000,
+          headers: { "Content-Type": "application/json" },
         }
       );
 
       console.log(`✅ AI Agent responded successfully`);
       return response.data;
-    } catch (error) {
-      console.error("Booking support chat error:", error.message);
 
-      // Return error in expected format
+    } catch (error) {
+      if (this._isAgentUnavailable(error)) {
+        // AI agent server is simply not running — use built-in FAQ
+        console.warn(
+          `⚠️  AI Agent unreachable (${error.code || error.message}). ` +
+          `Serving built-in FAQ response.`
+        );
+        return this._buildFallbackResponse(data.message);
+      }
+
+      // Unexpected error (bad request, 500 from agent, etc.) — log and rethrow
+      console.error("Booking support chat error:", error.message);
       throw new Error(
         error.response?.data?.message ||
           error.message ||
@@ -330,10 +417,8 @@ class AIService {
   }
 
   /**
-   * Clear conversation history for a user
-   *
-   * @param {Object} data - { userId, sessionId }
-   * @returns {Promise<Object>} Success response
+   * Clear conversation history.
+   * Gracefully handles the case where the agent server is down.
    */
   async clearBookingSupportHistory(data) {
     try {
@@ -342,17 +427,20 @@ class AIService {
       const response = await axios.post(
         `${this.aiAgentUrl}/api/agents/user/booking-support/clear-history`,
         data,
-        {
-          timeout: 5000,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
+        { timeout: 5000, headers: { "Content-Type": "application/json" } }
       );
 
       console.log(`✅ History cleared successfully`);
       return response.data;
     } catch (error) {
+      if (this._isAgentUnavailable(error)) {
+        console.warn("⚠️  AI Agent unreachable — skipping remote history clear.");
+        return {
+          success: true,
+          message: "Conversation history cleared (local session reset).",
+        };
+      }
+
       console.error("Clear history error:", error.message);
       throw new Error(
         error.response?.data?.message || "Failed to clear conversation history"
@@ -361,9 +449,8 @@ class AIService {
   }
 
   /**
-   * Check booking support agent health
-   *
-   * @returns {Promise<Object>} Health status with component details
+   * Check booking support agent health.
+   * Never throws — always returns a health object the controller can forward.
    */
   async checkBookingSupportHealth() {
     try {
@@ -371,14 +458,16 @@ class AIService {
         `${this.aiAgentUrl}/api/agents/user/booking-support/health`,
         { timeout: 5000 }
       );
-
       return response.data;
     } catch (error) {
-      console.error("Booking support health check error:", error.message);
+      const unavailable = this._isAgentUnavailable(error);
       return {
         success: false,
-        status: "unhealthy",
-        error: error.message,
+        status: unavailable ? "agent_offline" : "unhealthy",
+        message: unavailable
+          ? `AI Agent server not reachable at ${this.aiAgentUrl}. Built-in FAQ fallback is active.`
+          : error.message,
+        fallback_active: unavailable,
         url: this.aiAgentUrl,
         timestamp: new Date().toISOString(),
       };
@@ -386,10 +475,7 @@ class AIService {
   }
 
   /**
-   * Get booking support agent statistics
-   * Useful for monitoring dashboards
-   *
-   * @returns {Promise<Object>} Agent stats including sessions, performance, etc.
+   * Get booking support agent statistics.
    */
   async getBookingSupportStats() {
     try {
@@ -397,9 +483,16 @@ class AIService {
         `${this.aiAgentUrl}/api/agents/user/booking-support/stats`,
         { timeout: 5000 }
       );
-
       return response.data;
     } catch (error) {
+      if (this._isAgentUnavailable(error)) {
+        return {
+          success: false,
+          status: "agent_offline",
+          message: "AI Agent server is not running. Stats unavailable.",
+          fallback_active: true,
+        };
+      }
       console.error("Booking support stats error:", error.message);
       throw new Error(
         error.response?.data?.message ||

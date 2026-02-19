@@ -20,7 +20,6 @@ export const signup = async (req, res) => {
             return res.status(400).json({ message: "User already exists" });
         }
         
-        
         // Find role by name
         const foundRole = await Role.findOne({ role_Name: role });
         if (!foundRole) {
@@ -39,9 +38,10 @@ export const signup = async (req, res) => {
             role: foundRole._id,
         });
         await createdUser.save();
-        
 
-         const token = jwt.sign(
+        // FIX: Unified token structure — consistent with login token
+        // Both signup and login now use the same payload shape
+        const token = jwt.sign(
             {
                 userId: createdUser._id,
                 role: foundRole.role_Name
@@ -90,15 +90,12 @@ export const login = async (req, res) => {
             return res.status(401).json({ message: "Invalid credentials" });
         }
 
-        // Generate JWT token
+        // FIX: Changed from nested `{ user: { id } }` to flat `{ userId }` 
+        // to match what authMiddleware reads via decoded.userId
         const token = jwt.sign(
             {
-                user: {
-                    id: user._id,
-                    fullname: user.fullname,
-                    email: user.email,
-                    role: user.role.role_Name
-                }
+                userId: user._id,
+                role: user.role.role_Name
             },
             process.env.JWT_SECRET,
             { expiresIn: '24h' }
@@ -169,8 +166,8 @@ export const getAllUsers = async (req, res) => {
         // Fetch all users and populate their roles
         const users = await User.find()
             .populate('role')
-            .select('-password') // Exclude password from the response
-            .sort({ createdAt: -1 }); // Sort by newest first
+            .select('-password')
+            .sort({ createdAt: -1 });
 
         // Group users by role
         const usersByRole = users.reduce((acc, user) => {
@@ -209,7 +206,7 @@ export const getAllUsers = async (req, res) => {
 export const addToWishlist = async (req, res) => {
     try {
         const { eventId } = req.body;
-        const userId = req.user.id; // From auth middleware
+        const userId = req.user.id;
 
         // Validate eventId
         if (!eventId) {
@@ -273,7 +270,6 @@ export const removeFromWishlist = async (req, res) => {
         });
     } catch (error) {
         console.error("Error removing from wishlist:", error);
-        // Check if error is a MongoDB CastError (invalid ID format)
         if (error.name === 'CastError') {
             return res.status(400).json({ message: "Invalid event ID format" });
         }
@@ -283,7 +279,7 @@ export const removeFromWishlist = async (req, res) => {
 
 export const getWishlist = async (req, res) => {
     try {
-        const userId = req.user.id; // From auth middleware
+        const userId = req.user.id;
 
         // Find user and populate wishlist with event details
         const user = await User.findById(userId).populate('wishlist');
@@ -302,128 +298,128 @@ export const getWishlist = async (req, res) => {
 
 export const getUserProfile = async (req, res) => {
     try {
-      const userId = req.user.id;
-      const user = await User.findById(userId)
-        .populate('role', 'role_Name')
-        .select('-password');
-  
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-  
-      res.status(200).json({
-        user: {
-          _id: user._id,
-          fullname: user.fullname,
-          email: user.email,
-          contactNo: user.contactNo,
-          role: user.role.role_Name,
-          profileImage: user.profileImage
+        const userId = req.user.id;
+        const user = await User.findById(userId)
+            .populate('role', 'role_Name')
+            .select('-password');
+
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
         }
-      });
+
+        res.status(200).json({
+            user: {
+                _id: user._id,
+                fullname: user.fullname,
+                email: user.email,
+                contactNo: user.contactNo,
+                role: user.role.role_Name,
+                profileImage: user.profileImage
+            }
+        });
     } catch (error) {
-      console.error("Profile fetch error:", error);
-      res.status(500).json({ message: "Internal Server Error" });
+        console.error("Profile fetch error:", error);
+        res.status(500).json({ message: "Internal Server Error" });
     }
-  };
-  
+};
+
 export const updateProfile = async (req, res) => {
     try {
-      const userId = req.user.id;
-      const { fullname, contactNo } = req.body;
-  
-      // Validate input
-      if (!fullname || !contactNo) {
-        return res.status(400).json({ message: "Fullname and contact number are required" });
-      }
-  
-      const user = await User.findByIdAndUpdate(
-        userId, 
-        { fullname, contactNo }, 
-        { new: true, runValidators: true }
-      );
-  
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-  
-      res.status(200).json({
-        message: "Profile updated successfully",
-        user: {
-          _id: user._id,
-          fullname: user.fullname,
-          email: user.email,
-          contactNo: user.contactNo
+        const userId = req.user.id;
+        const { fullname, contactNo } = req.body;
+
+        // Validate input
+        if (!fullname || !contactNo) {
+            return res.status(400).json({ message: "Fullname and contact number are required" });
         }
-      });
+
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { fullname, contactNo },
+            { new: true, runValidators: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        res.status(200).json({
+            message: "Profile updated successfully",
+            user: {
+                _id: user._id,
+                fullname: user.fullname,
+                email: user.email,
+                contactNo: user.contactNo
+            }
+        });
     } catch (error) {
-      console.error("Profile update error:", error);
-      res.status(500).json({ message: "Internal Server Error" });
+        console.error("Profile update error:", error);
+        res.status(500).json({ message: "Internal Server Error" });
     }
-  };
+};
 
 export const uploadProfileImage = async (req, res) => {
     try {
-      const image = req.files?.image;
-      const userId = req.user.id; // From auth middleware
-  
-      // Validate inputs
-      if (!image) {
-        return res.status(400).json({ message: "No image uploaded" });
-      }
-  
-      // Find the user to ensure they exist
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-  
-      // Validate file type
-      const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
-      if (!allowedTypes.includes(image.mimetype)) {
-        return res.status(400).json({ 
-          message: "Invalid file type. Only JPEG, PNG, and GIF are allowed" 
-        });
-      }
-  
-      // Generate unique filename
-      const filename = `profile-${userId}-${Date.now()}.${image.name.split('.').pop()}`;
-      const uploadDir = path.join(process.cwd(), 'uploads', 'profiles');
-      
-      // Ensure directory exists
-      if (!fs.existsSync(uploadDir)){
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-  
-      const uploadPath = path.join(uploadDir, filename);
-      
-      // Delete existing profile image if it exists
-      if (user.profileImage) {
-        const oldImagePath = path.join(process.cwd(), user.profileImage);
-        if (fs.existsSync(oldImagePath)) {
-          fs.unlinkSync(oldImagePath);
+        const image = req.files?.image;
+        const userId = req.user.id;
+
+        // Validate inputs
+        if (!image) {
+            return res.status(400).json({ message: "No image uploaded" });
         }
-      }
-  
-      // Save file
-      await image.mv(uploadPath);
-  
-      // Update user with image URL
-      const imageUrl = `/uploads/profiles/${filename}`;
-      user.profileImage = imageUrl;
-      await user.save();
-  
-      res.status(200).json({ 
-        success: true,
-        message: "Profile image uploaded successfully", 
-        imageUrl 
-      });
+
+        // Find the user to ensure they exist
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // Validate file type
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+        if (!allowedTypes.includes(image.mimetype)) {
+            return res.status(400).json({
+                message: "Invalid file type. Only JPEG, PNG, and GIF are allowed"
+            });
+        }
+
+        // Generate unique filename
+        const filename = `profile-${userId}-${Date.now()}.${image.name.split('.').pop()}`;
+        const uploadDir = path.join(process.cwd(), 'uploads', 'profiles');
+
+        // Ensure directory exists
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+
+        const uploadPath = path.join(uploadDir, filename);
+
+        // Delete existing profile image if it exists
+        if (user.profileImage) {
+            const oldImagePath = path.join(process.cwd(), user.profileImage);
+            if (fs.existsSync(oldImagePath)) {
+                fs.unlinkSync(oldImagePath);
+            }
+        }
+
+        // Save file
+        await image.mv(uploadPath);
+
+        // Update user with image URL
+        const imageUrl = `/uploads/profiles/${filename}`;
+        user.profileImage = imageUrl;
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Profile image uploaded successfully",
+            imageUrl
+        });
     } catch (error) {
-      console.error("Profile image upload error:", error);
-      res.status(500).json({ 
-        success: false,
-        message: "Profile image upload failed", 
-        error: error.message 
-      });
+        console.error("Profile image upload error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Profile image upload failed",
+            error: error.message
+        });
     }
-  };
+};
