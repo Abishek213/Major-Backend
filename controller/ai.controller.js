@@ -685,10 +685,6 @@ export const updateNegotiation = asyncHandler(async (req, res) => {
 });
 
 // ==================== ORGANIZER DASHBOARD ASSISTANT ====================
-/**
- * Get comprehensive dashboard metrics for organizer
- * Endpoint: GET /api/ai/dashboard/metrics/:organizerId
- */
 export const getOrganizerDashboardMetrics = asyncHandler(async (req, res) => {
   const { organizerId } = req.params;
   const { dateRange, startDate, endDate, status } = req.query;
@@ -768,10 +764,6 @@ export const getOrganizerDashboardMetrics = asyncHandler(async (req, res) => {
   }
 });
 
-/**
- * Get event metrics only
- * Endpoint: GET /api/ai/dashboard/events/:organizerId
- */
 export const getOrganizerEventMetrics = asyncHandler(async (req, res) => {
   const { organizerId } = req.params;
   const { dateRange, startDate, endDate, status } = req.query;
@@ -785,10 +777,6 @@ export const getOrganizerEventMetrics = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get revenue metrics only
- * Endpoint: GET /api/ai/dashboard/revenue/:organizerId
- */
 export const getOrganizerRevenueMetrics = asyncHandler(async (req, res) => {
   const { organizerId } = req.params;
   const { dateRange, startDate, endDate } = req.query;
@@ -802,10 +790,6 @@ export const getOrganizerRevenueMetrics = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get booking metrics only
- * Endpoint: GET /api/ai/dashboard/bookings/:organizerId
- */
 export const getOrganizerBookingMetrics = asyncHandler(async (req, res) => {
   const { organizerId } = req.params;
   const { dateRange, startDate, endDate } = req.query;
@@ -819,10 +803,6 @@ export const getOrganizerBookingMetrics = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get rating metrics only
- * Endpoint: GET /api/ai/dashboard/ratings/:organizerId
- */
 export const getOrganizerRatingMetrics = asyncHandler(async (req, res) => {
   const { organizerId } = req.params;
   const { dateRange, startDate, endDate } = req.query;
@@ -836,10 +816,6 @@ export const getOrganizerRatingMetrics = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get sentiment metrics only
- * Endpoint: GET /api/ai/dashboard/sentiment/:organizerId
- */
 export const getOrganizerSentimentMetrics = asyncHandler(async (req, res) => {
   const { organizerId } = req.params;
   const { dateRange, startDate, endDate } = req.query;
@@ -853,10 +829,6 @@ export const getOrganizerSentimentMetrics = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get trends metrics only
- * Endpoint: GET /api/ai/dashboard/trends/:organizerId
- */
 export const getOrganizerTrendsMetrics = asyncHandler(async (req, res) => {
   const { organizerId } = req.params;
   const { dateRange, startDate, endDate } = req.query;
