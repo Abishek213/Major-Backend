@@ -21,6 +21,7 @@ const aiActionLogSchema = new mongoose.Schema(
         "sentiment_analysis",
         "system_alert",
         "event_planning",
+        "dashboard_query",
       ],
     },
     actionDetails: {
