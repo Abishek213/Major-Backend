@@ -25,6 +25,7 @@ import notificationRoutes from "./routes/notification.routes.js";
 import eventRequestRoutes from "./routes/eventrequest.routes.js";
 import aiRoutes from "./routes/ai.routes.js";
 import negotiationRoutes from './routes/negotiation.routes.js';
+// import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();

@@ -4,13 +4,13 @@ import mongoose from 'mongoose';
 const userSchema = new mongoose.Schema(
   {
     fullname: { type: String, required: true, trim: true },
-    email: { 
-      type: String, 
-      required: true, 
-      unique: true, 
-      trim: true, 
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
       lowercase: true,
-      match: [/^\S+@\S+\.\S+$/, 'Invalid email format.'] 
+      match: [/^\S+@\S+\.\S+$/, 'Invalid email format.']
     },
     password: { type: String, required: true, minlength: 6 },
     contactNo: {
@@ -19,10 +19,10 @@ const userSchema = new mongoose.Schema(
       trim: true,
       match: [/^\+?[\d\s-]{10,}$/, 'Invalid contact number format.']
     },
-    role: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'Role', 
-      required: true 
+    role: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Role',
+      required: true
     },
     profileImage: {
       type: String,
@@ -38,53 +38,49 @@ const userSchema = new mongoose.Schema(
     // ===== NEW ORGANIZER FIELDS =====
     // These will only be used if user has role = Organizer
     organizerDetails: {
-      // Professional Info
-      businessName: { type: String, default: null },
-      businessRegistration: { type: String, default: null },
-      yearsOfExperience: { type: Number, default: 0 },
-      
-      // Service Details
+      // PROFESSIONAL IDENTITY (Required - makes them look legit)
+      businessName: { type: String, required: true },
+      contactPerson: { type: String, required: true },  // Their name
+      contactPhone: { type: String, required: true },    // Direct line
+      establishedYear: { type: Number },                  // Optional trust signal
+
+      // MATCHING DATA (Required for AI)
       expertise: [{
         type: String,
-        enum: ['wedding', 'birthday', 'corporate', 'conference', 'party', 
-               'anniversary', 'workshop', 'concert', 'festival', 'general'],
-        default: []
+        enum: ['wedding', 'birthday', 'corporate', 'conference', 'party',
+          'anniversary', 'workshop', 'concert', 'festival'],
+        required: true
       }],
-      
+
       serviceAreas: [{
-        city: String,
-        distance: Number // max distance willing to travel (km)
+        city: {
+          type: String,
+          required: true,
+          enum: ['Kathmandu', 'Lalitpur', 'Bhaktapur', 'Pokhara', 'Chitwan',
+            'Biratnagar', 'Butwal', 'Nepalgunj', 'Dharan', 'Other']
+        }
       }],
-      
-      // Pricing
-      priceRange: {
-        min: { type: Number, default: 0 },
-        max: { type: Number, default: 0 },
-        currency: { type: String, default: 'NPR' }
+
+      // PRICING (Optional - their choice)
+      pricing: {
+        wedding: { min: Number, max: Number },
+        birthday: { min: Number, max: Number },
+        corporate: { min: Number, max: Number }
+        // They only fill what they selected in expertise
       },
-      
-      pricingModel: {
-        type: String,
-        enum: ['fixed', 'per_person', 'custom'],
-        default: 'custom'
-      },
-      
-      // Performance Metrics
-      rating: { type: Number, default: 0, min: 0, max: 5 },
-      totalReviews: { type: Number, default: 0 },
+
+      // AUTO-CALCULATED (No work for them)
+      rating: { type: Number, default: 0 },
       totalEvents: { type: Number, default: 0 },
-      
-      // Availability
       responseTime: { type: String, default: '24h' },
-      
-      // Verification
-      isVerified: { type: Boolean, default: false },
-      autoMatchEnabled: { type: Boolean, default: true }
+
+      // VERIFICATION (Admin work, not theirs)
+      isVerified: { type: Boolean, default: false }
     }
 
 
   },
-  { timestamps: true } 
+  { timestamps: true }
 );
 // Indexes for efficient querying
 userSchema.index({ 'organizerDetails.expertise': 1 });
