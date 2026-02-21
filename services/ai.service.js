@@ -9,6 +9,18 @@ import Review from "../model/review.schema.js";
  * ============================================================================
  * AI SERVICE - BACKEND INTEGRATION LAYER
  * ============================================================================
+ *
+ * This service acts as the integration layer between Backend and AI Agent Service
+ *
+ * RESPONSIBILITIES:
+ * - Build user context from database
+ * - Fetch candidate events
+ * - Call AI Agent Service endpoints
+ * - Cache recommendations
+ * - Provide fallback data
+ * - Health monitoring
+ *
+ * ============================================================================
  */
 
 class AIService {
@@ -90,6 +102,10 @@ class AIService {
   // EVENT RECOMMENDATION METHODS
   // ============================================================================
 
+  /**
+   * Assembles the full user context from DB before sending to AI Agent.
+   * The AI Agent has no DB access — it can only score what we give it.
+   */
   async _buildUserContext(userId) {
     const { default: User } = await import("../model/user.schema.js");
     const user = await User.findById(userId)
@@ -105,8 +121,12 @@ class AIService {
     const bookings = await Booking.find({ userId })
       .populate({
         path: "eventId",
-        select: "event_name category tags price location event_date attendees totalSlots",
-        populate: { path: "category", select: "category_Name" },
+        select:
+          "event_name category tags price location event_date attendees totalSlots",
+        populate: {
+          path: "category",
+          select: "category_Name",
+        },
       })
       .select("eventId")
       .lean();
@@ -116,8 +136,12 @@ class AIService {
     const reviews = await Review.find({ userId })
       .populate({
         path: "eventId",
-        select: "event_name category tags price location event_date attendees totalSlots",
-        populate: { path: "category", select: "category_Name" },
+        select:
+          "event_name category tags price location event_date attendees totalSlots",
+        populate: {
+          path: "category",
+          select: "category_Name",
+        },
       })
       .select("eventId rating")
       .lean();
@@ -152,13 +176,19 @@ class AIService {
         `📡 Calling AI Agent | candidates: ${candidateEvents.length} | wishlist: ${userContext.wishlistEvents.length} | booked: ${userContext.bookedEvents.length}`
       );
 
+      // ✅ FIXED: Changed from /api/recommendations to /api/agents/user/recommendations
       const response = await axios.post(
         `${this.aiAgentUrl}/api/agents/user/recommendations`,
-        { userId, limit, userContext, candidateEvents },
+        {
+          userId,
+          limit,
+          userContext,
+          candidateEvents,
+        },
         { timeout: 8000 }
       );
 
-      return response.data.success ? response.data.recommendations : [];
+      return response.success ? response.recommendations : [];
     } catch (error) {
       console.error("AI Agent call failed:", error.message);
       return [];
@@ -166,55 +196,40 @@ class AIService {
   }
 
   async getRecommendationAgent() {
-    try {
-      let agent = await AI_Agent.findOne({
+    let agent = await AI_Agent.findOne({
+      name: "Event Recommendation Agent",
+      agent_type: "admin",
+    });
+    if (!agent) {
+      agent = await AI_Agent.create({
         name: "Event Recommendation Agent",
+        role: "assistant",
         agent_type: "admin",
+        capabilities: ["event_recommendation", "user_behavior_analysis"],
+        status: "active",
       });
-
-      if (!agent) {
-        agent = await AI_Agent.create({
-          name: "Event Recommendation Agent",
-          role: "assistant",
-          agent_type: "admin",
-          capabilities: ["event_recommendation", "user_behavior_analysis"],
-          status: "active",
-        });
-        console.log("🤖 Created recommendation agent:", agent._id);
-      }
-
-      return agent;
-    } catch (error) {
-      console.error("Agent error:", error.message);
-      throw error;
+      console.log("🤖 Created recommendation agent:", agent._id);
     }
+    return agent;
   }
 
   async storeRecommendations(userId, recommendations, agentId) {
-    try {
-      if (!recommendations.length) return [];
-
-      const docs = recommendations.map((rec) => ({
-        user_id: userId,
-        event_id: rec.event_id,
-        agent_id: agentId,
-        confidence_score: rec.confidence_score,
-        recommendation_reason: rec.recommendation_reason,
-      }));
-
-      const saved = await AI_Recommendation.insertMany(docs);
-      console.log(`💾 Stored ${saved.length} recommendations`);
-      return saved;
-    } catch (error) {
-      console.error("Storage error:", error.message);
-      return [];
-    }
+    if (!recommendations.length) return [];
+    const docs = recommendations.map((rec) => ({
+      user_id: userId,
+      event_id: rec.event_id,
+      agent_id: agentId,
+      confidence_score: rec.confidence_score,
+      recommendation_reason: rec.recommendation_reason,
+    }));
+    const saved = await AI_Recommendation.insertMany(docs);
+    console.log(`💾 Stored ${saved.length} recommendations`);
+    return saved;
   }
 
   async getCachedRecommendations(userId, limit) {
     try {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
       const cached = await AI_Recommendation.find({
         user_id: userId,
         createdAt: { $gte: oneDayAgo },
@@ -276,10 +291,9 @@ class AIService {
 
   async checkAIHealth() {
     try {
-      const response = await axios.get(`${this.aiAgentUrl}/api/health`, {
+      const response = await axios.get(`${this.aiAgentUrl}/api/agents/health`, {
         timeout: 3000,
       });
-
       return {
         status: "healthy",
         url: this.aiAgentUrl,
@@ -300,81 +314,11 @@ class AIService {
   // ============================================================================
 
   /**
-   * Checks whether an error means the AI agent server is simply unreachable
-   * (not running, wrong port, network issue, timeout).
+   * Chat with booking support agent
+   * Forwards chat request to AI Agent Service
    *
-   * FIX: Added ECONNABORTED — this is the code axios sets when its own
-   * `timeout` option fires (different from the OS-level ETIMEDOUT).
-   * Without it, axios timeouts were falling through to the rethrow branch,
-   * causing the controller to return a 500 instead of the FAQ fallback.
-   */
-  _isAgentUnavailable(error) {
-    if (!error) return false;
-    const code = error.code || "";
-    const msg = (error.message || "").toLowerCase();
-    return (
-      code === "ECONNREFUSED"  ||  // nothing running on that port
-      code === "ENOTFOUND"     ||  // DNS failure / bad hostname
-      code === "ECONNRESET"    ||  // connection dropped mid-flight
-      code === "ETIMEDOUT"     ||  // OS / TCP-level timeout
-      code === "ECONNABORTED"  ||  // ← axios-level timeout (timeout: N ms)
-      msg.includes("timeout")  ||  // catch-all for timeout phrasing
-      msg.includes("network error")
-    );
-  }
-
-  /**
-   * Simple keyword-based FAQ matcher.
-   * Scans the message against the built-in FAQ knowledge base and
-   * returns the best matching response, or a generic fallback.
-   */
-  _buildFallbackResponse(message) {
-    const lower = (message || "").toLowerCase();
-
-    for (const entry of this._faqEntries) {
-      if (entry.keywords.some((kw) => lower.includes(kw))) {
-        return {
-          success: true,
-          response: entry.response,
-          suggestions: [
-            "How do I book an event?",
-            "What is the refund policy?",
-            "How do I contact support?",
-            "Where can I find my ticket?",
-          ],
-          confidence: 0.75,
-          source: "built_in_faq",
-          timestamp: new Date().toISOString(),
-        };
-      }
-    }
-
-    // Generic fallback when no keywords match
-    return {
-      success: true,
-      response:
-        "Thank you for reaching out! I can help you with bookings, refunds, ticket transfers, payments, and account issues. " +
-        "Could you please describe your question in a bit more detail? " +
-        "You can also reach our support team at support@eventa.com.",
-      suggestions: [
-        "How do I book an event?",
-        "What is the refund policy?",
-        "How do I transfer my ticket?",
-        "How do I contact support?",
-      ],
-      confidence: 0.5,
-      source: "built_in_faq",
-      timestamp: new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Chat with booking support agent.
-   *
-   * Strategy:
-   *   1. Try the external AI agent (30 s timeout — enough for LLM generation).
-   *   2. If the agent is unreachable / down → answer from built-in FAQ.
-   *   3. Any other unexpected error → rethrow so the controller returns 500.
+   * @param {Object} data - { message, userId, sessionId }
+   * @returns {Promise<Object>} AI response with message and metadata
    */
   async chatBookingSupport(data) {
     try {
@@ -386,28 +330,19 @@ class AIService {
         `${this.aiAgentUrl}/api/agents/user/booking-support/chat`,
         data,
         {
-          // 30s timeout — LLM responses can take 10-25s for complex queries.
-          // ECONNABORTED was firing at 8s, cutting off valid AI responses.
-          timeout: 60000,
-          headers: { "Content-Type": "application/json" },
+          timeout: 30000, // 30 second timeout (AI processing can take time)
+          headers: {
+            "Content-Type": "application/json",
+          },
         }
       );
 
       console.log(`✅ AI Agent responded successfully`);
       return response.data;
-
     } catch (error) {
-      if (this._isAgentUnavailable(error)) {
-        // AI agent server is simply not running — use built-in FAQ
-        console.warn(
-          `⚠️  AI Agent unreachable (${error.code || error.message}). ` +
-          `Serving built-in FAQ response.`
-        );
-        return this._buildFallbackResponse(data.message);
-      }
-
-      // Unexpected error (bad request, 500 from agent, etc.) — log and rethrow
       console.error("Booking support chat error:", error.message);
+
+      // Return error in expected format
       throw new Error(
         error.response?.data?.message ||
           error.message ||
@@ -417,8 +352,10 @@ class AIService {
   }
 
   /**
-   * Clear conversation history.
-   * Gracefully handles the case where the agent server is down.
+   * Clear conversation history for a user
+   *
+   * @param {Object} data - { userId, sessionId }
+   * @returns {Promise<Object>} Success response
    */
   async clearBookingSupportHistory(data) {
     try {
@@ -427,20 +364,17 @@ class AIService {
       const response = await axios.post(
         `${this.aiAgentUrl}/api/agents/user/booking-support/clear-history`,
         data,
-        { timeout: 5000, headers: { "Content-Type": "application/json" } }
+        {
+          timeout: 5000,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
       );
 
       console.log(`✅ History cleared successfully`);
       return response.data;
     } catch (error) {
-      if (this._isAgentUnavailable(error)) {
-        console.warn("⚠️  AI Agent unreachable — skipping remote history clear.");
-        return {
-          success: true,
-          message: "Conversation history cleared (local session reset).",
-        };
-      }
-
       console.error("Clear history error:", error.message);
       throw new Error(
         error.response?.data?.message || "Failed to clear conversation history"
@@ -449,8 +383,9 @@ class AIService {
   }
 
   /**
-   * Check booking support agent health.
-   * Never throws — always returns a health object the controller can forward.
+   * Check booking support agent health
+   *
+   * @returns {Promise<Object>} Health status with component details
    */
   async checkBookingSupportHealth() {
     try {
@@ -475,24 +410,242 @@ class AIService {
   }
 
   /**
-   * Get booking support agent statistics.
+   * Get booking support agent statistics
+   * Useful for monitoring dashboards
+   *
+   * @returns {Promise<Object>} Agent stats including sessions, performance, etc.
    */
   async getBookingSupportStats() {
+    const response = await this._request(
+      "get",
+      "/api/agents/user/booking-support/stats",
+      null,
+      { timeout: 5000 }
+    );
+    return response;
+  }
+
+  async getPlanningSuggestions(eventData) {
+    console.log(
+      `📡 Calling AI Agent Planning Agent for event: ${eventData.event_name}`
+    );
+    const response = await this._request(
+      "post",
+      "/api/agents/organizer/planning/suggest",
+      eventData,
+      { timeout: 10000 }
+    );
+    console.log(`✅ AI Agent planning suggestions received`);
+    return response;
+  }
+
+  async checkPlanningAgentHealth() {
+    try {
+      const response = await axios.get(`${this.aiAgentUrl}/api/agents/health`, {
+        timeout: 5000,
+      });
+
+      const healthData = response.data;
+
+      const planningStatus =
+        healthData.components?.planning ||
+        healthData.agents?.find((a) => a.name === "planning-agent")?.status ||
+        "unknown";
+
+      return {
+        success: true,
+        status: planningStatus === "ready" ? "active" : "inactive",
+        agentStatus: planningStatus,
+        name: "planning-agent",
+        type: "organizer",
+        capabilities: [
+          "price_optimization",
+          "tag_recommendation",
+          "slot_suggestion",
+          "datetime_optimization",
+          "deadline_validation",
+        ],
+        llmProvider: process.env.LLM_PROVIDER || "ollama",
+        llmStatus: planningStatus === "ready" ? "ready" : "initializing",
+        fullHealthCheck: healthData,
+      };
+    } catch (error) {
+      console.error("Planning agent health check error:", error.message);
+      return {
+        success: false,
+        status: "inactive",
+        error: error.message,
+        url: this.aiAgentUrl,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  async getDashboardInsights(organizerId, metricsData) {
+    try {
+      console.log(
+        `📊 Requesting dashboard insights for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/insights",
+        {
+          organizerId,
+          metrics: metricsData,
+        },
+        { timeout: 15000 }
+      );
+
+      console.log(`✅ Dashboard insights generated successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard insights error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        fallback: true,
+        insights: {
+          summary: "Unable to generate AI insights at this time",
+          highlights: [],
+          concerns: [],
+          recommendations: [],
+        },
+      };
+    }
+  }
+
+  async answerDashboardQuery(organizerId, query, context = {}) {
+    try {
+      console.log(
+        `❓ Processing dashboard query for ${organizerId}: ${query.substring(
+          0,
+          50
+        )}...`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/query",
+        {
+          organizerId,
+          query,
+          context,
+        },
+        { timeout: 20000 }
+      );
+
+      console.log(`✅ Dashboard query answered successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard query error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        answer:
+          "I apologize, but I encountered an error processing your question. Please try rephrasing or contact support.",
+      };
+    }
+  }
+
+  async getDashboardRecommendations(organizerId, metricsData) {
+    try {
+      console.log(
+        `💡 Generating recommendations for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/recommendations",
+        {
+          organizerId,
+          metrics: metricsData,
+        },
+        { timeout: 15000 }
+      );
+
+      console.log(`✅ Recommendations generated successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard recommendations error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        recommendations: [],
+      };
+    }
+  }
+
+  async initializeDashboardAgent(organizerId) {
+    try {
+      console.log(
+        `🚀 Initializing dashboard agent for organizer: ${organizerId}`
+      );
+
+      const response = await this._request(
+        "post",
+        "/api/agents/organizer/dashboard/initialize",
+        { organizerId },
+        { timeout: 10000 }
+      );
+
+      console.log(`✅ Dashboard agent initialized successfully`);
+      return response;
+    } catch (error) {
+      console.error("Dashboard agent initialization error:", error.message);
+      return {
+        success: false,
+        error: error.message,
+        message: "Failed to initialize dashboard agent",
+      };
+    }
+  }
+
+  async getDashboardAgent(organizerId = null) {
+    try {
+      // Look for existing dashboard agent
+      let agent = await AI_Agent.findOne({
+        name: "Organizer Dashboard Assistant",
+        agent_type: "organizer",
+        role: "assistant",
+      });
+
+      // Create if doesn't exist
+      if (!agent) {
+        agent = await AI_Agent.create({
+          name: "Organizer Dashboard Assistant",
+          role: "assistant",
+          agent_type: "organizer",
+          user_id: organizerId || null,
+          capabilities: {
+            metrics_aggregation: true,
+            revenue_analysis: true,
+            sentiment_analysis: true,
+            trend_prediction: true,
+            natural_language_query: true,
+            recommendation_generation: true,
+          },
+          status: "active",
+        });
+        console.log("🤖 Created dashboard assistant agent:", agent._id);
+      }
+
+      return agent;
+    } catch (error) {
+      console.error("Get dashboard agent error:", error.message);
+      throw error;
+    }
+  }
+
+  async checkDashboardAgentHealth() {
     try {
       const response = await axios.get(
-        `${this.aiAgentUrl}/api/agents/user/booking-support/stats`,
+        `${this.aiAgentUrl}/api/agents/organizer/dashboard/health`,
         { timeout: 5000 }
       );
+
       return response.data;
     } catch (error) {
-      if (this._isAgentUnavailable(error)) {
-        return {
-          success: false,
-          status: "agent_offline",
-          message: "AI Agent server is not running. Stats unavailable.",
-          fallback_active: true,
-        };
-      }
       console.error("Booking support stats error:", error.message);
       throw new Error(
         error.response?.data?.message ||

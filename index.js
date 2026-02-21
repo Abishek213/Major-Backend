@@ -13,6 +13,9 @@ import seedEvents from "./seeders/eventSeeder.js";
 import seedCategories from "./seeders/categorieSeeder.js";
 import seedRolePermissions from "./seeders/rolePermissionSeeder.js";
 import seedAIAgents from "./seeders/aiSeeder.js";
+import seedOrganizerDashboard from "./seeders/organizerDashboardSeeder.js";
+import seedplannerAgents from "./seeders/planningAgentSeeder.js";
+// import seedAIPlanner from "./seeders/aiplannerSeeder.js";
 
 import eventRoutes from "./routes/Event.routes.js";
 import userRoute from "./routes/user.route.js";
@@ -23,7 +26,7 @@ import categoriesRoutes from "./routes/categories.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
 import eventRequestRoutes from "./routes/eventrequest.routes.js";
 import aiRoutes from "./routes/ai.routes.js";
-
+import negotiationRoutes from "./routes/negotiation.routes.js";
 dotenv.config();
 
 const app = express();
@@ -91,6 +94,9 @@ const connectDB = async () => {
       await seedEvents();
       await seedRolePermissions();
       await seedAIAgents();
+      await seedOrganizerDashboard();
+      await seedplannerAgents();
+      // await seedAIPlanner();
 
       console.log("Database seeding completed.");
     } else {
@@ -124,6 +130,7 @@ app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/eventrequest", eventRequestRoutes);
 app.use("/api/v1/ai", aiRoutes);
+app.use("/api/negotiation", negotiationRoutes);
 
 // Global Error Handler
 app.use((err, req, res, next) => {
