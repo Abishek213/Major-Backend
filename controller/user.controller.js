@@ -428,3 +428,46 @@ export const uploadProfileImage = async (req, res) => {
       });
     }
   };
+
+export const getNotificationPreferences = async (req, res) => {
+    try {
+      const userId = req.user.id; // from auth middleware
+      const user = await User.findById(userId).select(
+        "notificationPreferences"
+      );
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      // Return defaults if field doesn't exist yet
+      const prefs = user.notificationPreferences || {
+        soundEnabled: true,
+        toastEnabled: true,
+      };
+      res.status(200).json({ preferences: prefs });
+    } catch (error) {
+      console.error("Error fetching notification preferences:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  };
+
+export const updateNotificationPreferences = async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { soundEnabled, toastEnabled } = req.body; // include any other fields
+
+      const user = await User.findByIdAndUpdate(
+        userId,
+        { $set: { notificationPreferences: { soundEnabled, toastEnabled } } },
+        { new: true, runValidators: true }
+      ).select("notificationPreferences");
+
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      res.status(200).json({ preferences: user.notificationPreferences });
+    } catch (error) {
+      console.error("Error updating notification preferences:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  };
