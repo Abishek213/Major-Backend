@@ -76,7 +76,7 @@ if (!process.env.MongoDB_URI) {
 }
 
 const URI = process.env.MongoDB_URI;
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 4001;
 
 const connectDB = async () => {
   try {
