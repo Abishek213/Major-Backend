@@ -37,8 +37,21 @@ export const signup = async (req, res) => {
             password: hashedPassword,
             contactNo,
             role: foundRole._id,
-            organizerDetails: role === 'Organizer' ? organizerDetails : {}
         });
+
+         // ONLY add organizer details if role is Organizer AND they are provided
+        if (role === 'Organizer') {
+            // Make sure organizerDetails exists and has required fields
+            createdUser.organizerDetails = {
+                businessName: organizerDetails?.businessName || '',
+                contactPerson: organizerDetails?.contactPerson || '',
+                contactPhone: organizerDetails?.contactPhone || '',
+                establishedYear: organizerDetails?.establishedYear || null,
+                expertise: Array.isArray(organizerDetails?.expertise) ? organizerDetails.expertise : [],
+                serviceAreas: Array.isArray(organizerDetails?.serviceAreas) ? organizerDetails.serviceAreas : [],
+                pricing: organizerDetails?.pricing || {}
+            };
+        }
         await createdUser.save();
         
 

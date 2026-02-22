@@ -39,9 +39,9 @@ const userSchema = new mongoose.Schema(
     // These will only be used if user has role = Organizer
     organizerDetails: {
       // PROFESSIONAL IDENTITY (Required - makes them look legit)
-      businessName: { type: String, required: true },
-      contactPerson: { type: String, required: true },  // Their name
-      contactPhone: { type: String, required: true },    // Direct line
+      businessName: { type: String, required:function() { return this.role === 'Organizer'; } },
+      contactPerson: { type: String, required:function() { return this.role === 'Organizer'; }},  // Their name
+      contactPhone: { type: String, required:function() { return this.role === 'Organizer'; }},    // Direct line
       establishedYear: { type: Number },                  // Optional trust signal
 
       // MATCHING DATA (Required for AI)
@@ -49,13 +49,13 @@ const userSchema = new mongoose.Schema(
         type: String,
         enum: ['wedding', 'birthday', 'corporate', 'conference', 'party',
           'anniversary', 'workshop', 'concert', 'festival'],
-        required: true
+        required:function() { return this.role === 'Organizer'; }
       }],
 
       serviceAreas: [{
         city: {
           type: String,
-          required: true,
+          required:function() { return this.role === 'Organizer'; },
           enum: ['Kathmandu', 'Lalitpur', 'Bhaktapur', 'Pokhara', 'Chitwan',
             'Biratnagar', 'Butwal', 'Nepalgunj', 'Dharan', 'Other']
         }
