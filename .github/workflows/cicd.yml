@@ -38,7 +38,7 @@ jobs:
             --name eventa-backend-container \
             --restart unless-stopped \
             -e PORT='${{ secrets.PORT }}' \
-            -e MONGO_URI='${{ secrets.MONGO_URI }}' \
+            -e MongoDB_URI='${{ secrets.MONGO_URI }}' \
             -e JWT_SECRET='${{ secrets.JWT_SECRET }}' \
             -e JWT_EXPIRY='${{ secrets.JWT_EXPIRY }}' \
             -e EMAIL_USER='${{ secrets.EMAIL_USER }}' \
