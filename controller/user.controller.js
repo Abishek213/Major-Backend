@@ -49,7 +49,7 @@ export const signup = async (req, res) => {
                 establishedYear: organizerDetails?.establishedYear || null,
                 expertise: Array.isArray(organizerDetails?.expertise) ? organizerDetails.expertise : [],
                 serviceAreas: Array.isArray(organizerDetails?.serviceAreas) ? organizerDetails.serviceAreas : [],
-                pricing: organizerDetails?.pricing || {}
+                // pricing: organizerDetails?.pricing || {}
             };
         }
         await createdUser.save();
