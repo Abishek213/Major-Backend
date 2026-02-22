@@ -13,7 +13,6 @@ import {
   getEventRequestWithAIInsights,    // NEW
   getAISuggestedOrganizers,         // NEW
   reprocessWithAI,
-  searchOrganizersForAI 
 } from '../controller/eventrequest.controller.js';
 
 const router = express.Router();
@@ -32,8 +31,6 @@ router.get('/with-ai-insights/:id', authenticateUser, getEventRequestWithAIInsig
 router.get('/ai-suggestions/:id', authenticateUser, getAISuggestedOrganizers);
 router.post('/reprocess-with-ai/:id', authenticateUser, reprocessWithAI);
 
-// Add to any existing router
-router.get('/organizers/search',searchOrganizersForAI);
 
 
 export default router;

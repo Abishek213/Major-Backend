@@ -5,34 +5,107 @@ import Event from "../model/event.schema.js";
 import Booking from "../model/booking.schema.js";
 import Review from "../model/review.schema.js";
 
+/**
+ * ============================================================================
+ * AI SERVICE - BACKEND INTEGRATION LAYER
+ * ============================================================================
+ *
+ * This service acts as the integration layer between Backend and AI Agent Service
+ *
+ * RESPONSIBILITIES:
+ * - Build user context from database
+ * - Fetch candidate events
+ * - Call AI Agent Service endpoints
+ * - Cache recommendations
+ * - Provide fallback data
+ * - Health monitoring
+ *
+ * ============================================================================
+ */
+
 class AIService {
   constructor() {
-    this.aiAgentUrl = process.env.AI_AGENT_URL || "http://localhost:3002";
+    this.aiAgentUrl = process.env.AI_AGENT_SERVICE_URL || "http://localhost:3002"
+
+    // ── Built-in FAQ knowledge base ─────────────────────────────────────────
+    // Used as fallback when the external AI agent is unreachable.
+    // Add / edit entries freely — each entry has keywords and a response.
+    this._faqEntries = [
+      {
+        keywords: ["refund", "money back", "cancel", "cancellation"],
+        response:
+          "Our refund policy allows full refunds up to 48 hours before the event. " +
+          "Cancellations within 48 hours may be eligible for a 50% refund. " +
+          "To request a refund, go to My Bookings → select the booking → click 'Request Refund'. " +
+          "Refunds are processed within 5–7 business days.",
+      },
+      {
+        keywords: ["transfer", "ticket", "give", "friend", "someone else"],
+        response:
+          "You can transfer your ticket to another person up to 24 hours before the event. " +
+          "Go to My Bookings → select the booking → click 'Transfer Ticket' and enter the recipient's email. " +
+          "They will receive a confirmation email with the new ticket.",
+      },
+      {
+        keywords: ["book", "how to book", "register", "sign up", "reserve"],
+        response:
+          "To book an event: (1) Browse events on the homepage or use Search. " +
+          "(2) Click on the event you want. " +
+          "(3) Click 'Book Now' and select the number of tickets. " +
+          "(4) Complete payment. You'll receive a confirmation email with your ticket.",
+      },
+      {
+        keywords: ["payment", "pay", "price", "cost", "fee", "charge"],
+        response:
+          "We accept credit/debit cards, PayPal, and eSewa. " +
+          "Payment is processed securely at checkout. " +
+          "You will receive a receipt via email after successful payment. " +
+          "If a payment failed, please check your bank and try again — you will not be charged twice.",
+      },
+      {
+        keywords: ["contact", "support", "help", "human", "agent", "speak"],
+        response:
+          "You can reach our support team at support@eventa.com or call +977-01-1234567 (Mon–Fri, 9AM–6PM). " +
+          "For urgent issues during an event, use the emergency contact provided in your confirmation email.",
+      },
+      {
+        keywords: ["reschedule", "postpone", "date change", "new date"],
+        response:
+          "If an event is rescheduled by the organizer, you will be notified via email and given the option to keep your booking or request a full refund. " +
+          "If you need to change your attendance date for a multi-day event, contact the organizer directly through the event page.",
+      },
+      {
+        keywords: ["ticket", "where", "find", "download", "qr", "code"],
+        response:
+          "Your ticket is available in My Bookings. You can download it as a PDF or show the QR code directly from the app at the venue. " +
+          "A copy is also sent to your registered email address after booking.",
+      },
+      {
+        keywords: ["account", "login", "password", "forgot", "reset"],
+        response:
+          "To reset your password, click 'Forgot Password' on the login page and enter your email. " +
+          "You will receive a reset link within a few minutes. " +
+          "If you don't see it, check your spam folder or contact support@eventa.com.",
+      },
+      {
+        keywords: ["organizer", "create event", "host", "list event", "publish"],
+        response:
+          "To create an event, register or log in as an organizer. " +
+          "Go to Dashboard → Create Event and fill in the details (name, date, venue, tickets, pricing). " +
+          "Events are reviewed and approved within 24 hours. " +
+          "For organizer onboarding help, email organizers@eventa.com.",
+      },
+    ];
   }
 
-  async _request(method, path, data = null, options = {}) {
-    try {
-      const response = await axios({
-        method,
-        url: `${this.aiAgentUrl}${path}`,
-        data,
-        timeout: options.timeout || 10000,
-        headers: { "Content-Type": "application/json", ...options.headers },
-      });
-      return response.data;
-    } catch (error) {
-      console.error(
-        `AI Agent request failed: ${method} ${path}`,
-        error.message
-      );
-      throw new Error(
-        error.response?.data?.message ||
-          error.message ||
-          "AI Agent request failed"
-      );
-    }
-  }
+  // ============================================================================
+  // EVENT RECOMMENDATION METHODS
+  // ============================================================================
 
+  /**
+   * Assembles the full user context from DB before sending to AI Agent.
+   * The AI Agent has no DB access — it can only score what we give it.
+   */
   async _buildUserContext(userId) {
     const { default: User } = await import("../model/user.schema.js");
     const user = await User.findById(userId)
@@ -50,7 +123,10 @@ class AIService {
         path: "eventId",
         select:
           "event_name category tags price location event_date attendees totalSlots",
-        populate: { path: "category", select: "category_Name" },
+        populate: {
+          path: "category",
+          select: "category_Name",
+        },
       })
       .select("eventId")
       .lean();
@@ -62,7 +138,10 @@ class AIService {
         path: "eventId",
         select:
           "event_name category tags price location event_date attendees totalSlots",
-        populate: { path: "category", select: "category_Name" },
+        populate: {
+          path: "category",
+          select: "category_Name",
+        },
       })
       .select("eventId rating")
       .lean();
@@ -97,9 +176,9 @@ class AIService {
         `📡 Calling AI Agent | candidates: ${candidateEvents.length} | wishlist: ${userContext.wishlistEvents.length} | booked: ${userContext.bookedEvents.length}`
       );
 
-      const response = await this._request(
-        "post",
-        "/api/agents/user/recommendations",
+      // ✅ FIXED: Changed from /api/recommendations to /api/agents/user/recommendations
+      const response = await axios.post(
+        `${this.aiAgentUrl}/api/agents/user/recommendations`,
         {
           userId,
           limit,
@@ -230,32 +309,84 @@ class AIService {
     }
   }
 
+  // ============================================================================
+  // BOOKING SUPPORT AGENT METHODS
+  // ============================================================================
+
+  /**
+   * Chat with booking support agent
+   * Forwards chat request to AI Agent Service
+   *
+   * @param {Object} data - { message, userId, sessionId }
+   * @returns {Promise<Object>} AI response with message and metadata
+   */
   async chatBookingSupport(data) {
-    console.log(
-      `💬 Forwarding chat to AI Agent: ${data.message?.substring(0, 50)}...`
-    );
-    const response = await this._request(
-      "post",
-      "/api/agents/user/booking-support/chat",
-      data,
-      { timeout: 30000 }
-    );
-    console.log(`✅ AI Agent responded successfully`);
-    return response;
+    try {
+      console.log(
+        `💬 Forwarding chat to AI Agent: ${data.message?.substring(0, 50)}...`
+      );
+
+      const response = await axios.post(
+        `${this.aiAgentUrl}/api/agents/user/booking-support/chat`,
+        data,
+        {
+          timeout: 30000, // 30 second timeout (AI processing can take time)
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      console.log(`✅ AI Agent responded successfully`);
+      return response.data;
+    } catch (error) {
+      console.error("Booking support chat error:", error.message);
+
+      // Return error in expected format
+      throw new Error(
+        error.response?.data?.message ||
+          error.message ||
+          "Failed to communicate with booking support agent"
+      );
+    }
   }
 
+  /**
+   * Clear conversation history for a user
+   *
+   * @param {Object} data - { userId, sessionId }
+   * @returns {Promise<Object>} Success response
+   */
   async clearBookingSupportHistory(data) {
-    console.log(`🗑️ Clearing history for: ${data.userId || data.sessionId}`);
-    const response = await this._request(
-      "post",
-      "/api/agents/user/booking-support/clear-history",
-      data,
-      { timeout: 5000 }
-    );
-    console.log(`✅ History cleared successfully`);
-    return response;
+    try {
+      console.log(`🗑️ Clearing history for: ${data.userId || data.sessionId}`);
+
+      const response = await axios.post(
+        `${this.aiAgentUrl}/api/agents/user/booking-support/clear-history`,
+        data,
+        {
+          timeout: 5000,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      console.log(`✅ History cleared successfully`);
+      return response.data;
+    } catch (error) {
+      console.error("Clear history error:", error.message);
+      throw new Error(
+        error.response?.data?.message || "Failed to clear conversation history"
+      );
+    }
   }
 
+  /**
+   * Check booking support agent health
+   *
+   * @returns {Promise<Object>} Health status with component details
+   */
   async checkBookingSupportHealth() {
     try {
       const response = await axios.get(
@@ -264,17 +395,26 @@ class AIService {
       );
       return response.data;
     } catch (error) {
-      console.error("Booking support health check error:", error.message);
+      const unavailable = this._isAgentUnavailable(error);
       return {
         success: false,
-        status: "unhealthy",
-        error: error.message,
+        status: unavailable ? "agent_offline" : "unhealthy",
+        message: unavailable
+          ? `AI Agent server not reachable at ${this.aiAgentUrl}. Built-in FAQ fallback is active.`
+          : error.message,
+        fallback_active: unavailable,
         url: this.aiAgentUrl,
         timestamp: new Date().toISOString(),
       };
     }
   }
 
+  /**
+   * Get booking support agent statistics
+   * Useful for monitoring dashboards
+   *
+   * @returns {Promise<Object>} Agent stats including sessions, performance, etc.
+   */
   async getBookingSupportStats() {
     const response = await this._request(
       "get",
@@ -504,102 +644,13 @@ class AIService {
         { timeout: 5000 }
       );
 
-      return {
-        success: true,
-        status: response.data.status || "unknown",
-        ...response.data,
-      };
+      return response.data;
     } catch (error) {
-      console.error("Dashboard agent health check error:", error.message);
-      return {
-        success: false,
-        status: "unhealthy",
-        error: error.message,
-        url: this.aiAgentUrl,
-        timestamp: new Date().toISOString(),
-      };
-    }
-  }
-
-  async getDashboardAgentStats(organizerId, timeRange = "30d") {
-    try {
-      const daysBack = timeRange === "7d" ? 7 : timeRange === "90d" ? 90 : 30;
-      const dateFrom = new Date();
-      dateFrom.setDate(dateFrom.getDate() - daysBack);
-
-      const agent = await this.getDashboardAgent(organizerId);
-
-      const { default: AI_ActionLog } = await import(
-        "../model/ai_actionLog.schema.js"
+      console.error("Booking support stats error:", error.message);
+      throw new Error(
+        error.response?.data?.message ||
+          "Failed to get booking support statistics"
       );
-
-      const filter = {
-        agentId: agent._id,
-        logType: {
-          $in: [
-            "dashboard_query",
-            "dashboard_insights",
-            "dashboard_recommendations",
-          ],
-        },
-        createdAt: { $gte: dateFrom },
-      };
-
-      if (organizerId) {
-        filter.userId = organizerId;
-      }
-
-      const [totalQueries, successfulQueries, failedQueries, recentLogs] =
-        await Promise.all([
-          AI_ActionLog.countDocuments(filter),
-          AI_ActionLog.countDocuments({ ...filter, success: true }),
-          AI_ActionLog.countDocuments({ ...filter, success: false }),
-          AI_ActionLog.find(filter)
-            .sort({ createdAt: -1 })
-            .limit(20)
-            .select("logType actionDetails success createdAt"),
-        ]);
-
-      const queryTypes = await AI_ActionLog.aggregate([
-        { $match: filter },
-        { $group: { _id: "$logType", count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-      ]);
-
-      return {
-        success: true,
-        agent: {
-          id: agent._id,
-          name: agent.name,
-          status: agent.status,
-          type: agent.agent_type,
-        },
-        summary: {
-          total_queries: totalQueries,
-          successful: successfulQueries,
-          failed: failedQueries,
-          success_rate:
-            totalQueries > 0
-              ? ((successfulQueries / totalQueries) * 100).toFixed(1)
-              : "0.0",
-          time_range: timeRange,
-          period_start: dateFrom.toISOString(),
-          period_end: new Date().toISOString(),
-        },
-        query_types: queryTypes.map((qt) => ({
-          type: qt._id,
-          count: qt.count,
-        })),
-        recent_activity: recentLogs.map((log) => ({
-          type: log.logType,
-          details: log.actionDetails,
-          success: log.success,
-          timestamp: log.createdAt,
-        })),
-      };
-    } catch (error) {
-      console.error("Dashboard agent stats error:", error.message);
-      throw error;
     }
   }
 }

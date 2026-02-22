@@ -4,11 +4,7 @@ import Role from '../model/role.schema.js';
 import { wsManager } from '../webSocket.js';
 import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
-import axios from 'axios'; // NEW: For AI service communication
-// import User from '../model/user.schema.js'; // NEW: For fetching organizer details in AI suggestions
-// In eventrequest.controller.js - You're using AIEventRequestService but not importing it
-// ADD THIS at the top:
-// import AIEventRequestService from '../services/ai-event-request.service.js';
+import axios from 'axios';
 
 const createResponse = (success, message, data = null, error = null) => ({
   success,
@@ -17,24 +13,20 @@ const createResponse = (success, message, data = null, error = null) => ({
   error
 });
 
-
-// ========== AI SERVICE CONFIGURATION ========== // NEW SECTION
-const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3002/api';
+// ========== AI SERVICE CONFIGURATION ==========
+// FIX: AI routes live on the SAME backend (port 4001), not a separate service.
+// The /api/ai/process-event-request route is defined in ai.routes.js
+// which is mounted at /api/v1/ai (or /api/ai — match your server.js mount point).
+const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:4001';
 const AI_ENABLED = process.env.AI_ENABLED === 'true';
 
-
 /**
- * Call AI Service for event request enhancement
- * @param {Object} requestData - Event request data
- * @param {string} userId - User ID
- * @returns {Object} AI enhanced response
+ * Call AI Service for event request enhancement.
+ * Hits POST /api/v1/ai/process-event-request (defined in ai.routes.js)
  */
 const callAIAgent = async (requestData, userId, naturalLanguage = null) => {
   if (!AI_ENABLED) {
-    return {
-      aiEnabled: false,
-      message: 'AI service is disabled'
-    };
+    return { aiEnabled: false, message: 'AI service is disabled' };
   }
 
   try {
@@ -56,6 +48,7 @@ const callAIAgent = async (requestData, userId, naturalLanguage = null) => {
     const url = `${baseUrl}/process-event-request`;
     console.log('🔍 DEBUG - URL:', url);
 
+    // Calls ai.routes.js → processEventRequest() in ai.controller.js
     const response = await axios.post(
       url,
       aiRequest,
@@ -103,13 +96,16 @@ const callAIAgent = async (requestData, userId, naturalLanguage = null) => {
   }
 };
 
-// Update fetchAISuggestedOrganizers:
+/**
+ * Fetch AI-suggested organizers.
+ * Hits GET /api/v1/ai/event-suggestions (defined in ai.routes.js)
+ */
 const fetchAISuggestedOrganizers = async (eventData) => {
   if (!AI_ENABLED) return [];
 
   try {
     const response = await axios.get(
-      `${AI_AGENT_URL}/api/agents/event-suggestions`,
+      `${AI_AGENT_URL}/api/v1/ai/event-suggestions`,
       {
         params: {
           eventType: eventData.eventType,
@@ -126,14 +122,9 @@ const fetchAISuggestedOrganizers = async (eventData) => {
     return [];
   }
 };
-// ========== EXISTING FUNCTIONS (NO CHANGES) ========== //
-// All your existing functions remain exactly the same
 
+// ========== EXPORTED CONTROLLER FUNCTIONS ==========
 
-
-
-
-// Create Event Request  - ENHANCED with AI
 export const createEventRequest = async (req, res) => {
   try {
     const { useAI = false, naturalLanguage = null } = req.body;
@@ -208,7 +199,7 @@ export const createEventRequest = async (req, res) => {
       }
     });
 
-    // 4. Broadcast to Organizers
+    // 4. Broadcast to organizers via WebSocket
     wsManager.broadcastToRole('Organizer', {
       type: 'notification',
       action: 'new_event_request',
@@ -243,22 +234,12 @@ export const createEventRequest = async (req, res) => {
 
   } catch (error) {
     console.error('Error creating event request:', error);
-    res.status(500).json(createResponse(
-      false,
-      'Error creating event request',
-      null,
-      error.message
-    ));
+    res.status(500).json(
+      createResponse(false, 'Error creating event request', null, error.message)
+    );
   }
 };
 
-
-
-// ========== NEW AI-ENHANCED FUNCTIONS ========== //
-
-/**
- * Get event request with AI insights
- */
 export const getEventRequestWithAIInsights = async (req, res) => {
   try {
     const { id } = req.params;
@@ -268,23 +249,17 @@ export const getEventRequestWithAIInsights = async (req, res) => {
       .populate('interestedOrganizers.organizerId', 'fullname email contact');
 
     if (!eventRequest) {
-      return res.status(404).json(createResponse(
-        false,
-        'Event request not found'
-      ));
+      return res.status(404).json(createResponse(false, 'Event request not found'));
     }
 
-    // Get AI suggestions if not already processed
     let aiSuggestions = eventRequest.aiInsights;
     if (!aiSuggestions && AI_ENABLED) {
-      const organizers = await fetchAISuggestedOrganizers(eventRequest); // UPDATED FUNCTION CALL
+      const organizers = await fetchAISuggestedOrganizers(eventRequest);
       aiSuggestions = {
         processed: false,
         matchedOrganizers: organizers.slice(0, 5),
         timestamp: new Date().toISOString()
       };
-
-      // Save for future reference
       eventRequest.aiInsights = aiSuggestions;
       await eventRequest.save();
     }
@@ -301,7 +276,7 @@ export const getEventRequestWithAIInsights = async (req, res) => {
         createdAt: eventRequest.createdAt,
         user: eventRequest.userId
       },
-      interestedOrganizers: eventRequest.interestedOrganizers.map(org => ({
+      interestedOrganizers: eventRequest.interestedOrganizers.map((org) => ({
         organizer: org.organizerId,
         message: org.message,
         status: org.status,
@@ -311,63 +286,44 @@ export const getEventRequestWithAIInsights = async (req, res) => {
       aiInsights: aiSuggestions || { enabled: false, message: 'AI service not available' }
     };
 
-    res.status(200).json(createResponse(
-      true,
-      'Event request retrieved with AI insights',
-      response
-    ));
-
+    res.status(200).json(
+      createResponse(true, 'Event request retrieved with AI insights', response)
+    );
   } catch (error) {
     console.error('Error fetching event request with AI insights:', error);
-    res.status(500).json(createResponse(
-      false,
-      'Error fetching event request',
-      null,
-      error.message
-    ));
+    res.status(500).json(
+      createResponse(false, 'Error fetching event request', null, error.message)
+    );
   }
 };
 
-
-/**
- * Get AI-suggested organizers for an event request
- */
-export const getAISuggestedOrganizers = async (req, res) => { // THIS IS THE EXPORTED FUNCTION
+export const getAISuggestedOrganizers = async (req, res) => {
   try {
     const { id } = req.params;
 
     const eventRequest = await EventRequest.findById(id);
     if (!eventRequest) {
-      return res.status(404).json(createResponse(
-        false,
-        'Event request not found'
-      ));
+      return res.status(404).json(createResponse(false, 'Event request not found'));
     }
 
     if (!AI_ENABLED) {
-      return res.status(200).json(createResponse(
-        true,
-        'AI service is disabled',
-        { aiEnabled: false, suggestions: [] }
-      ));
+      return res.status(200).json(
+        createResponse(true, 'AI service is disabled', { aiEnabled: false, suggestions: [] })
+      );
     }
 
-    // Call AI service for organizer suggestions
-    const aiResponse = await fetchAISuggestedOrganizers(eventRequest); // UPDATED FUNCTION CALL
+    const aiResponse = await fetchAISuggestedOrganizers(eventRequest);
 
-    // Filter out organizers who have already responded
     const existingOrganizerIds = eventRequest.interestedOrganizers
-      .map(org => org.organizerId?.toString())
-      .filter(id => id); // Filter out undefined/null values
+      .map((org) => org.organizerId?.toString())
+      .filter(Boolean);
 
-    const filteredSuggestions = aiResponse.filter(suggestion =>
-      !existingOrganizerIds.includes(suggestion.id)
+    const filteredSuggestions = aiResponse.filter(
+      (suggestion) => !existingOrganizerIds.includes(suggestion.id?.toString())
     );
 
-    res.status(200).json(createResponse(
-      true,
-      'AI suggestions retrieved',
-      {
+    res.status(200).json(
+      createResponse(true, 'AI suggestions retrieved', {
         aiEnabled: true,
         totalSuggestions: aiResponse.length,
         filteredSuggestions: filteredSuggestions.slice(0, 10),
@@ -377,23 +333,16 @@ export const getAISuggestedOrganizers = async (req, res) => { // THIS IS THE EXP
           budget: eventRequest.budget,
           location: eventRequest.venue
         }
-      }
-    ));
-
+      })
+    );
   } catch (error) {
     console.error('Error getting AI suggestions:', error);
-    res.status(500).json(createResponse(
-      false,
-      'Failed to get AI suggestions',
-      null,
-      error.message
-    ));
+    res.status(500).json(
+      createResponse(false, 'Failed to get AI suggestions', null, error.message)
+    );
   }
 };
 
-/**
- * Reprocess event request with AI
- */
 export const reprocessWithAI = async (req, res) => {
   try {
     const { id } = req.params;
@@ -401,17 +350,11 @@ export const reprocessWithAI = async (req, res) => {
 
     const eventRequest = await EventRequest.findById(id);
     if (!eventRequest) {
-      return res.status(404).json(createResponse(
-        false,
-        'Event request not found'
-      ));
+      return res.status(404).json(createResponse(false, 'Event request not found'));
     }
 
     if (!AI_ENABLED) {
-      return res.status(400).json(createResponse(
-        false,
-        'AI service is disabled'
-      ));
+      return res.status(400).json(createResponse(false, 'AI service is disabled'));
     }
 
     const eventData = {
@@ -422,10 +365,9 @@ export const reprocessWithAI = async (req, res) => {
       description: eventRequest.description
     };
 
-    const aiInsights = await callAIService(eventData, eventRequest.userId, naturalLanguage);
+    const aiInsights = await callAIAgent(eventData, eventRequest.userId, naturalLanguage);
 
     if (aiInsights.success) {
-      // Update event request with new AI insights
       eventRequest.aiInsights = {
         processed: true,
         reprocessed: true,
@@ -438,205 +380,36 @@ export const reprocessWithAI = async (req, res) => {
 
       await eventRequest.save();
 
-      res.status(200).json(createResponse(
-        true,
-        'Event request reprocessed with AI',
-        {
+      res.status(200).json(
+        createResponse(true, 'Event request reprocessed with AI', {
           eventRequestId: eventRequest._id,
           aiInsights: eventRequest.aiInsights,
           timestamp: new Date().toISOString()
-        }
-      ));
+        })
+      );
     } else {
-      res.status(500).json(createResponse(
-        false,
-        'AI processing failed',
-        null,
-        aiInsights.error
-      ));
+      res.status(500).json(
+        createResponse(false, 'AI processing failed', null, aiInsights.error)
+      );
     }
-
   } catch (error) {
     console.error('Error reprocessing with AI:', error);
-    res.status(500).json(createResponse(
-      false,
-      'Failed to reprocess with AI',
-      null,
-      error.message
-    ));
+    res.status(500).json(
+      createResponse(false, 'Failed to reprocess with AI', null, error.message)
+    );
   }
 };
 
-
-// org matching
-export const searchOrganizersForAI = async (req, res) => {
-  try {
-    const { eventType, location, budget } = req.query;
-    
-    console.log('🔍 AI Service searching organizers:', { eventType, location, budget });
-    
-    // Get models safely
-    const Role = mongoose.model('Role');
-    const User = mongoose.model('User');
-    
-    // Find Organizer role
-    const organizerRole = await Role.findOne({ role_Name: 'Organizer' }).lean();
-    
-    if (!organizerRole) {
-      console.log('❌ No organizer role found');
-      return res.status(200).json({
-        success: true,
-        data: [],
-        count: 0,
-        message: 'No organizer role found'
-      });
-    }
-    
-    console.log('✅ Organizer role ID:', organizerRole._id);
-    
-    // SIMPLE QUERY - No complex filters first
-    const organizers = await User.find({ 
-      role: organizerRole._id 
-    })
-    .select('fullname email contactNo profileImage organizerDetails')
-    .limit(20)
-    .lean();
-    
-    console.log(`📊 Found ${organizers.length} total organizers`);
-    
-    if (organizers.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        count: 0,
-        message: 'No organizers found in database'
-      });
-    }
-    
-    // Log first organizer for debugging
-    console.log('📝 Sample organizer:', {
-      name: organizers[0].fullname,
-      hasDetails: !!organizers[0].organizerDetails,
-      expertise: organizers[0].organizerDetails?.expertise,
-      serviceAreas: organizers[0].organizerDetails?.serviceAreas
-    });
-    
-    // Format organizers for AI service
-    const formattedOrganizers = organizers.map(org => {
-      // Safe extraction with defaults
-      const details = org.organizerDetails || {};
-      const serviceAreas = details.serviceAreas || [];
-      const priceRange = details.priceRange || { min: 10000, max: 500000 };
-      
-      return {
-        _id: org._id,
-        id: org._id.toString(),
-        fullname: org.fullname || '',
-        email: org.email || '',
-        contactNo: org.contactNo || '',
-        profileImage: org.profileImage || null,
-        expertise: Array.isArray(details.expertise) ? details.expertise : [],
-        location: serviceAreas[0]?.city || 'Nepal',
-        rating: typeof details.rating === 'number' ? details.rating : 4.0,
-        priceRange: [
-          priceRange.min || 10000,
-          priceRange.max || 500000
-        ],
-        totalEvents: details.totalEvents || 0,
-        responseTime: details.responseTime || '24h',
-        isVerified: details.isVerified || false,
-        businessName: details.businessName || org.fullname,
-        yearsOfExperience: details.yearsOfExperience || 0,
-        serviceAreas: serviceAreas
-      };
-    });
-    
-    // Filter by location if provided (case-insensitive)
-    let filteredOrganizers = formattedOrganizers;
-    if (location) {
-      const locationLower = location.toLowerCase();
-      filteredOrganizers = formattedOrganizers.filter(org => {
-        // Check if any service area matches the location
-        return org.serviceAreas.some(area => 
-          area.city && area.city.toLowerCase().includes(locationLower)
-        );
-      });
-      
-      console.log(`📍 After location filter: ${filteredOrganizers.length} organizers`);
-    }
-    
-    // Filter by event type if provided
-    if (eventType && filteredOrganizers.length > 0) {
-      const eventTypeLower = eventType.toLowerCase();
-      filteredOrganizers = filteredOrganizers.filter(org => 
-        org.expertise.some(exp => 
-          exp.toLowerCase().includes(eventTypeLower) || 
-          eventTypeLower.includes(exp.toLowerCase())
-        )
-      );
-      
-      console.log(`🎯 After expertise filter: ${filteredOrganizers.length} organizers`);
-    }
-    
-    // Filter by budget if provided
-    if (budget && filteredOrganizers.length > 0) {
-      const budgetNum = parseInt(budget);
-      filteredOrganizers = filteredOrganizers.filter(org => {
-        const [min, max] = org.priceRange;
-        // Budget is within range or close to it
-        return budgetNum >= min * 0.7; // At least 70% of minimum
-      });
-      
-      console.log(`💰 After budget filter: ${filteredOrganizers.length} organizers`);
-    }
-    
-    console.log(`✅ Returning ${filteredOrganizers.length} organizers to AI service`);
-    
-    // ALWAYS return valid JSON
-    return res.status(200).json({
-      success: true,
-      data: filteredOrganizers,
-      count: filteredOrganizers.length,
-      debug: {
-        totalFound: organizers.length,
-        filteredCount: filteredOrganizers.length,
-        filters: { eventType, location, budget }
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Error in searchOrganizersForAI:', error);
-    
-    // Return error as valid JSON
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-      data: [],
-      count: 0
-    });
-  }
-};
-
-
-
-
-
-
-
-
-// old one
-
-// Get All Open Event Requests for Organizers
 export const getEventRequestsForOrganizer = async (req, res) => {
   try {
-    const { eventType } = req.query; // Get eventType from query params
-    const filter = eventType ? { eventType } : {}; // Apply filter only if eventType is provided
+    const { eventType } = req.query;
+    const filter = eventType ? { eventType } : {};
 
     const requests = await EventRequest.find({
       'interestedOrganizers.organizerId': { $ne: req.user.id },
-      ...filter, // Add the eventType filter here
+      ...filter
     })
-      .populate('userId', 'fullname email') // Fetch the name and email from the User model
+      .populate('userId', 'fullname email')
       .exec();
 
     res.status(200).json(requests);
@@ -646,7 +419,6 @@ export const getEventRequestsForOrganizer = async (req, res) => {
   }
 };
 
-// Organizer Expresses Interest in Event Request
 export const respondToEventRequest = async (req, res) => {
   const { message, status, proposedBudget } = req.body;
   const eventrequestId = req.params.id;
@@ -657,35 +429,32 @@ export const respondToEventRequest = async (req, res) => {
       return res.status(404).json({ message: 'Request not found' });
     }
 
-    // Find the organizer's existing response (if any)
     const existingOrganizerResponse = request.interestedOrganizers.find(
       (organizer) => organizer.organizerId.toString() === req.user._id.toString()
     );
 
-    // If the organizer has already responded, update their response
     if (existingOrganizerResponse) {
-      // If the organizer is editing the budget, update it
-      existingOrganizerResponse.proposedBudget = proposedBudget ? proposedBudget : existingOrganizerResponse.proposedBudget;
-      existingOrganizerResponse.message = message; // Optionally update the message
-      existingOrganizerResponse.status = status; // Optionally update the status
-      existingOrganizerResponse.responseDate = new Date(); // Update the response date
+      existingOrganizerResponse.proposedBudget = proposedBudget
+        ? proposedBudget
+        : existingOrganizerResponse.proposedBudget;
+      existingOrganizerResponse.message = message;
+      existingOrganizerResponse.status = status;
+      existingOrganizerResponse.responseDate = new Date();
 
       await request.save();
       return res.status(200).json({ message: 'Organizer response updated successfully!' });
     }
 
-    // If the organizer has not responded yet, add a new response
     request.interestedOrganizers.push({
       organizerId: req.user.id,
       message,
       status,
       responseDate: new Date(),
-      proposedBudget: proposedBudget || null, // If no proposed budget is provided, it will be null
+      proposedBudget: proposedBudget || null
     });
 
     await request.save();
     res.status(200).json({ message: 'Organizer response recorded successfully!' });
-
   } catch (error) {
     console.error('Error details:', error);
     res.status(500).json({ message: 'Error responding to event request', error: error.message });
@@ -696,31 +465,27 @@ export const getEventRequestsForUser = async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({ message: "Unauthorized. Token missing." });
+    return res.status(401).json({ message: 'Unauthorized. Token missing.' });
   }
 
   try {
     const decodedToken = jwt.decode(token);
-    // Fix 1: Ensure correct path to user ID in the token
-    const userId = decodedToken.id || decodedToken.user?.id; // Adjust based on your token structure
+    const userId = decodedToken.userId || decodedToken.user?.id;
 
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ error: "Invalid userId" });
+      return res.status(400).json({ error: 'Invalid userId' });
     }
 
-    // Fix 2: Correct population syntax and field names
-    const eventRequests = await EventRequest.find({ userId })
-      .populate({
-        path: "interestedOrganizers.organizerId",
-        select: "fullname contact", // Ensure these fields exist in the User model
-        model: "User" // Explicitly reference the model if needed
-      });
+    const eventRequests = await EventRequest.find({ userId }).populate({
+      path: 'interestedOrganizers.organizerId',
+      select: 'fullname contact',
+      model: 'User'
+    });
 
     if (!eventRequests || eventRequests.length === 0) {
-      return res.status(404).json({ message: "No event requests found for this user" });
+      return res.status(404).json({ message: 'No event requests found for this user' });
     }
 
-    // Fix 3: Correct data mapping
     const detailedEventRequests = eventRequests.map((event) => ({
       eventId: event._id,
       eventType: event.eventType,
@@ -730,55 +495,52 @@ export const getEventRequestsForUser = async (req, res) => {
       description: event.description,
       status: event.status,
       organizers: event.interestedOrganizers.map((org) => ({
-        organizerId: org.organizerId?._id, // Access populated organizer
+        organizerId: org.organizerId?._id,
         fullname: org.organizerId?.fullname,
         contact: org.organizerId?.contact,
-        message: org.message, // From EventRequest subdocument
+        message: org.message,
         status: org.status,
         responseDate: org.responseDate,
-        proposedBudget: org.proposedBudget,
-      })),
+        proposedBudget: org.proposedBudget
+      }))
     }));
 
     res.json({ eventRequests: detailedEventRequests });
   } catch (error) {
-    console.error("Error in getEventRequestsForUser:", error);
-    res.status(500).json({ message: "Internal server error", error: error.message });
+    console.error('Error in getEventRequestsForUser:', error);
+    res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };
 
 export const getAcceptedOrganizers = async (req, res) => {
-  // Get the token from the Authorization header
-  const token = req.headers.authorization?.split(' ')[1];  // "Bearer <token>"
+  const token = req.headers.authorization?.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({ message: "Unauthorized. Token missing." });
+    return res.status(401).json({ message: 'Unauthorized. Token missing.' });
   }
 
   try {
-    // Decode the JWT token to get the userId
     const decodedToken = jwt.decode(token);
-    console.log("Decoded token:", decodedToken);
-    const userId = decodedToken.user.id;  // Assuming your token contains the userId
-    console.log("User ID from token:", userId);
+    console.log('Decoded token:', decodedToken);
+    // FIX: support both token shapes (userId flat OR user.id nested)
+    const userId = decodedToken.userId || decodedToken.user?.id;
+    console.log('User ID from token:', userId);
 
-    // Validate the userId
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ error: "Invalid userId" });
+      return res.status(400).json({ error: 'Invalid userId' });
     }
 
-    // Fetch all event requests for the logged-in user
-    const eventRequests = await EventRequest.find({ userId: new mongoose.Types.ObjectId(userId) })
-      .populate("interestedOrganizers.organizerId", "fullname contact message ");  // Populate organizer details
+    const eventRequests = await EventRequest.find({
+      userId: new mongoose.Types.ObjectId(userId)
+    }).populate('interestedOrganizers.organizerId', 'fullname contact message');
 
     if (!eventRequests || eventRequests.length === 0) {
-      return res.status(404).json({ message: "No event requests found for this user" });
+      return res.status(404).json({ message: 'No event requests found for this user' });
     }
 
-    // Process event requests and filter accepted organizers
     const acceptedOrganizersByEvent = eventRequests.map((event) => {
       const acceptedOrganizers = event.interestedOrganizers
-        .filter((org) => org.status === "accepted") // Only include accepted organizers
+        .filter((org) => org.status === 'accepted')
         .map((org) => ({
           organizerId: org.organizerId._id,
           fullname: org.organizerId.fullname,
@@ -786,68 +548,54 @@ export const getAcceptedOrganizers = async (req, res) => {
           message: org.message,
           status: org.status,
           responseDate: org.responseDate,
-          proposedBudget: org.proposedBudget,
+          proposedBudget: org.proposedBudget
         }));
 
-      return {
-        eventType: event.eventType, // Include event type from the event request
-        eventId: event._id,
-        acceptedOrganizers,
-      };
+      return { eventType: event.eventType, eventId: event._id, acceptedOrganizers };
     });
 
-    // Filter events that have accepted organizers
-    const filteredResults = acceptedOrganizersByEvent.filter((event) => event.acceptedOrganizers.length > 0);
+    const filteredResults = acceptedOrganizersByEvent.filter(
+      (event) => event.acceptedOrganizers.length > 0
+    );
 
     res.json({ acceptedOrganizersByEvent: filteredResults });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
 export const acceptEventRequest = async (req, res) => {
   const { eventId } = req.params;
-  const { proposedBudget } = req.body; // Event ID from the request URL
-  const organizerId = req.user.id; // Organizer ID from the authenticated user
+  const { proposedBudget } = req.body;
+  const organizerId = req.user.id;
 
   try {
-    // Fetch the event request from the database
     const eventRequest = await EventRequest.findById(eventId);
 
-    // Check if the event request exists
     if (!eventRequest) {
       return res.status(404).json({ message: 'Event request not found' });
     }
 
-    // Check if the organizer is already in the interestedOrganizers array
     let organizerIndex = eventRequest.interestedOrganizers.findIndex(
       (org) => org.organizerId.toString() === organizerId.toString()
     );
 
-    // If the organizer is not already in the array, add them
     if (organizerIndex === -1) {
       eventRequest.interestedOrganizers.push({
-
-        organizerId, // Add organizer ID
-        status: 'accepted', // Set status to accepted
-        message: 'I am interested to organize this event', // Optional message
-        proposedBudget: proposedBudget || null, // Save the proposed budget, if provided
+        organizerId,
+        status: 'accepted',
+        message: 'I am interested to organize this event',
+        proposedBudget: proposedBudget || null
       });
     } else {
-      // If the organizer is already in the array, update their status
       eventRequest.interestedOrganizers[organizerIndex].status = 'accepted';
       if (proposedBudget) {
         eventRequest.interestedOrganizers[organizerIndex].proposedBudget = proposedBudget;
       }
     }
 
-    // Update the status of the event request to 'deal_done'
-    // eventRequest.status = 'open';
-
-    // Save the updated event request to the database
     await eventRequest.save();
-
     res.status(200).json({ message: 'Event request accepted successfully' });
   } catch (error) {
     console.error('Error in acceptEventRequest:', error);
@@ -856,35 +604,26 @@ export const acceptEventRequest = async (req, res) => {
 };
 
 export const rejectEventRequest = async (req, res) => {
-  const { eventId } = req.params; // Event ID from the request URL
-  const organizerId = req.user.id; // Organizer ID from the authenticated user
+  const { eventId } = req.params;
+  const organizerId = req.user.id;
 
   try {
-    // Fetch the event request from the database
     const eventRequest = await EventRequest.findById(eventId);
 
-    // Check if the event request exists
     if (!eventRequest) {
       return res.status(404).json({ message: 'Event request not found' });
     }
 
-    // Check if the organizer is already in the interestedOrganizers array
     let organizerIndex = eventRequest.interestedOrganizers.findIndex(
       (org) => org.organizerId.toString() === organizerId.toString()
     );
 
-    // If the organizer is not in the array, add them with a 'rejected' status
     if (organizerIndex === -1) {
-      eventRequest.interestedOrganizers.push({
-        organizerId, // Add organizer ID
-        status: 'rejected', // Set status to rejected
-      });
+      eventRequest.interestedOrganizers.push({ organizerId, status: 'rejected' });
     } else {
-      // If the organizer is already in the array, update their status
       eventRequest.interestedOrganizers[organizerIndex].status = 'rejected';
     }
 
-    // If all organizers have rejected, set the event request status back to 'open'
     const allRejected = eventRequest.interestedOrganizers.every(
       (org) => org.status === 'rejected'
     );
@@ -892,9 +631,7 @@ export const rejectEventRequest = async (req, res) => {
       eventRequest.status = 'open';
     }
 
-    // Save the updated event request to the database
     await eventRequest.save();
-
     res.status(200).json({ message: 'Event request rejected successfully' });
   } catch (error) {
     console.error('Error in rejectEventRequest:', error);
@@ -903,17 +640,15 @@ export const rejectEventRequest = async (req, res) => {
 };
 
 export const selectOrganizer = async (req, res) => {
-  const { eventId, organizerId } = req.body; // Extracting eventId and organizerId from the request body
+  const { eventId, organizerId } = req.body;
 
   try {
-    // Find the event request
     const eventRequest = await EventRequest.findById(eventId);
 
     if (!eventRequest) {
       return res.status(404).json({ message: 'Event request not found' });
     }
 
-    // Check if the organizer exists in the interestedOrganizers array
     const organizerExists = eventRequest.interestedOrganizers.some(
       (org) => org.organizerId.toString() === organizerId
     );
@@ -922,10 +657,7 @@ export const selectOrganizer = async (req, res) => {
       return res.status(404).json({ message: 'Organizer not found in interested organizers' });
     }
 
-    // Update the event request status to `deal_done`
     eventRequest.status = 'deal_done';
-
-    // Save the updated event request
     await eventRequest.save();
 
     res.status(200).json({ message: 'Organizer selected and status updated to deal_done' });
@@ -934,4 +666,3 @@ export const selectOrganizer = async (req, res) => {
     res.status(500).json({ message: 'Error updating event status', error });
   }
 };
-
