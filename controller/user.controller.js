@@ -7,7 +7,7 @@ import fs from 'fs';
 
 export const signup = async (req, res) => {
     try {
-        const { fullname, email, password, role, contactNo,organizerDetails  } = req.body;
+        const { fullname, email, password, role, contactNo, organizerDetails  } = req.body;
 
         // Validate input
         if (!fullname || !email || !password || !role || !contactNo) {
@@ -37,8 +37,21 @@ export const signup = async (req, res) => {
             password: hashedPassword,
             contactNo,
             role: foundRole._id,
-            organizerDetails: role === 'Organizer' ? organizerDetails : {}
         });
+
+         // ONLY add organizer details if role is Organizer AND they are provided
+        if (role === 'Organizer') {
+            // Make sure organizerDetails exists and has required fields
+            createdUser.organizerDetails = {
+                businessName: organizerDetails?.businessName || '',
+                contactPerson: organizerDetails?.contactPerson || '',
+                contactPhone: organizerDetails?.contactPhone || '',
+                establishedYear: organizerDetails?.establishedYear || null,
+                expertise: Array.isArray(organizerDetails?.expertise) ? organizerDetails.expertise : [],
+                serviceAreas: Array.isArray(organizerDetails?.serviceAreas) ? organizerDetails.serviceAreas : [],
+                pricing: organizerDetails?.pricing || {}
+            };
+        }
         await createdUser.save();
         
 
