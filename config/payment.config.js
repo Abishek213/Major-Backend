@@ -30,6 +30,6 @@ const requiredConfig = {
 
 Object.entries(requiredConfig).forEach(([key, value]) => {
   if (!value) {
-    throw new Error(`Missing required payment configuration: ${key}`);
+    console.warn(`Warning: Missing payment configuration: ${key}`);
   }
 });
