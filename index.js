@@ -40,6 +40,7 @@ wsManager.initialize(server);
 const allowedOrigins = [
   "https://eventa-puce.vercel.app",
   "http://localhost:5173",
+  "https://e-venta-qv4a.vercel.app",
   "http://52.70.70.109:3000",
 ];
 
