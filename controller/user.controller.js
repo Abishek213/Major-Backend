@@ -11,22 +11,79 @@ import path from "path";
 import fs from "fs";
 
 export const signup = async (req, res) => {
-  try {
-    const { fullname, email, password, role, contactNo, organizerDetails } =
-      req.body;
+    try {
+        const { fullname, email, password, role, contactNo, organizerDetails  } = req.body;
 
-    if (!fullname || !email || !password || !role || !contactNo) {
-      return res.status(400).json({ message: "All fields are required" });
-    }
+        // Validate input
+        if (!fullname || !email || !password || !role || !contactNo) {
+            return res.status(400).json({ message: "All fields are required" });
+        }
 
-    const userExist = await User.findOne({ email });
-    if (userExist) {
-      return res.status(400).json({ message: "User already exists" });
-    }
+        // Check if user already exists
+        const userExist = await User.findOne({ email });
+        if (userExist) {
+            return res.status(400).json({ message: "User already exists" });
+        }
+        
+        
+        // Find role by name
+        const foundRole = await Role.findOne({ role_Name: role });
+        if (!foundRole) {
+            return res.status(400).json({ message: "Invalid role" });
+        }
 
-    const foundRole = await Role.findOne({ role_Name: role });
-    if (!foundRole) {
-      return res.status(400).json({ message: "Invalid role" });
+        // Hash the password
+        const hashedPassword = await bcryptjs.hash(password, 10);
+
+        // Create and save user
+        const createdUser = new User({
+            fullname,
+            email,
+            password: hashedPassword,
+            contactNo,
+            role: foundRole._id,
+        });
+
+         // ONLY add organizer details if role is Organizer AND they are provided
+        if (role === 'Organizer') {
+            // Make sure organizerDetails exists and has required fields
+            createdUser.organizerDetails = {
+                businessName: organizerDetails?.businessName || '',
+                contactPerson: organizerDetails?.contactPerson || '',
+                contactPhone: organizerDetails?.contactPhone || '',
+                establishedYear: organizerDetails?.establishedYear || null,
+                expertise: Array.isArray(organizerDetails?.expertise) ? organizerDetails.expertise : [],
+                serviceAreas: Array.isArray(organizerDetails?.serviceAreas) ? organizerDetails.serviceAreas : [],
+                pricing: organizerDetails?.pricing || {}
+            };
+        }
+        await createdUser.save();
+        
+
+         const token = jwt.sign(
+            {
+                userId: createdUser._id,
+                role: foundRole.role_Name
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: "1d" }
+        );
+
+        // Respond with user details and role_Name
+        res.status(201).json({
+            message: "User created successfully",
+            token,
+            user: {
+                _id: createdUser._id,
+                fullname: createdUser.fullname,
+                email: createdUser.email,
+                contactNo: createdUser.contactNo,
+                role: foundRole.role_Name,
+            },
+        });
+    } catch (error) {
+        console.error("Error during signup:", error);
+        res.status(500).json({ message: "Internal Server Error" });
     }
 
     const hashedPassword = await bcryptjs.hash(password, 10);

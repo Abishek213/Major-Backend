@@ -49,50 +49,47 @@ const userSchema = new mongoose.Schema(
       // Add more preferences here as needed
     },
     organizerDetails: {
-      businessName: { type: String, default: null },
-      businessRegistration: { type: String, default: null },
-      yearsOfExperience: { type: Number, default: 0 },
-      expertise: [
-        {
-          type: String,
-          enum: [
-            "wedding",
-            "birthday",
-            "corporate",
-            "conference",
-            "party",
-            "anniversary",
-            "workshop",
-            "concert",
-            "festival",
-            "general",
-          ],
-          default: [],
-        },
-      ],
-      serviceAreas: [
-        {
-          city: String,
-          distance: Number,
-        },
-      ],
-      priceRange: {
-        min: { type: Number, default: 0 },
-        max: { type: Number, default: 0 },
-        currency: { type: String, default: "NPR" },
-      },
-      pricingModel: {
+      // PROFESSIONAL IDENTITY (Required - makes them look legit)
+      businessName: { type: String, required:function() { return this.role === 'Organizer'; } },
+      contactPerson: { type: String, required:function() { return this.role === 'Organizer'; }},  // Their name
+      contactPhone: { type: String, required:function() { return this.role === 'Organizer'; }},    // Direct line
+      establishedYear: { type: Number },                  // Optional trust signal
+
+      // MATCHING DATA (Required for AI)
+      expertise: [{
         type: String,
-        enum: ["fixed", "per_person", "custom"],
-        default: "custom",
+        enum: ['wedding', 'birthday', 'corporate', 'conference', 'party',
+          'anniversary', 'workshop', 'concert', 'festival'],
+        required:function() { return this.role === 'Organizer'; }
+      }],
+
+      serviceAreas: [{
+        city: {
+          type: String,
+          required:function() { return this.role === 'Organizer'; },
+          enum: ['Kathmandu', 'Lalitpur', 'Bhaktapur', 'Pokhara', 'Chitwan',
+            'Biratnagar', 'Butwal', 'Nepalgunj', 'Dharan', 'Other']
+        }
+      }],
+
+      // PRICING (Optional - their choice)
+      pricing: {
+        wedding: { min: Number, max: Number },
+        birthday: { min: Number, max: Number },
+        corporate: { min: Number, max: Number }
+        // They only fill what they selected in expertise
       },
-      rating: { type: Number, default: 0, min: 0, max: 5 },
-      totalReviews: { type: Number, default: 0 },
+
+      // AUTO-CALCULATED (No work for them)
+      rating: { type: Number, default: 0 },
       totalEvents: { type: Number, default: 0 },
-      responseTime: { type: String, default: "24h" },
-      isVerified: { type: Boolean, default: false },
-      autoMatchEnabled: { type: Boolean, default: true },
-    },
+      responseTime: { type: String, default: '24h' },
+
+      // VERIFICATION (Admin work, not theirs)
+      isVerified: { type: Boolean, default: false }
+    }
+
+
   },
   { timestamps: true }
 );
