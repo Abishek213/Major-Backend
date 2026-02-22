@@ -37,16 +37,16 @@ jobs:
             -p 4000:4000 \
             --name eventa-backend-container \
             --restart unless-stopped \
-            -e PORT=${{ secrets.PORT }} \
-            -e MONGO_URI=${{ secrets.MONGO_URI }} \
-            -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
-            -e JWT_EXPIRY=${{ secrets.JWT_EXPIRY }} \
-            -e EMAIL_USER=${{ secrets.EMAIL_USER }} \
-            -e EMAIL_PASS=${{ secrets.EMAIL_PASS }} \
-            -e TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }} \
-            -e TWILIO_AUTH_TOKEN=${{ secrets.TWILIO_AUTH_TOKEN }} \
-            -e TWILIO_PHONE_NUMBER=${{ secrets.TWILIO_PHONE_NUMBER }} \
-            -e KHALTI_SECRET_KEY=${{ secrets.KHALTI_SECRET_KEY }} \
-            -e ESEWA_SECRET_KEY=${{ secrets.ESEWA_SECRET_KEY }} \
-            -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
+            -e PORT='${{ secrets.PORT }}' \
+            -e MONGO_URI='${{ secrets.MONGO_URI }}' \
+            -e JWT_SECRET='${{ secrets.JWT_SECRET }}' \
+            -e JWT_EXPIRY='${{ secrets.JWT_EXPIRY }}' \
+            -e EMAIL_USER='${{ secrets.EMAIL_USER }}' \
+            -e EMAIL_PASS='${{ secrets.EMAIL_PASS }}' \
+            -e TWILIO_ACCOUNT_SID='${{ secrets.TWILIO_ACCOUNT_SID }}' \
+            -e TWILIO_AUTH_TOKEN='${{ secrets.TWILIO_AUTH_TOKEN }}' \
+            -e TWILIO_PHONE_NUMBER='${{ secrets.TWILIO_PHONE_NUMBER }}' \
+            -e KHALTI_SECRET_KEY='${{ secrets.KHALTI_SECRET_KEY }}' \
+            -e ESEWA_SECRET_KEY='${{ secrets.ESEWA_SECRET_KEY }}' \
+            -e GEMINI_API_KEY='${{ secrets.GEMINI_API_KEY }}' \
             himanshhhh/eventa-backend:latest
