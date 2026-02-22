@@ -34,37 +34,59 @@ const callAIAgent = async (requestData, userId, naturalLanguage = null) => {
 
     const aiRequest = {
       userId: userId.toString(),
-      naturalLanguage: naturalLanguage || requestData.description
+      naturalLanguage: naturalLanguage || requestData.description,
     };
 
-    console.log(
-      '🔍 Sending natural language to AI:',
-      aiRequest.naturalLanguage.substring(0, 100) + '...'
-    );
+    console.log('🔍 Sending natural language to AI:', 
+      aiRequest.naturalLanguage.substring(0, 100) + '...');   
+
+    // FIX 1: Use the correct endpoint (the one that works)
+    const baseUrl = AI_AGENT_URL.endsWith('/api') 
+      ? AI_AGENT_URL.slice(0, -4)  // Remove trailing /api if present
+      : AI_AGENT_URL;
+    
+    const url = `${baseUrl}/process-event-request`;
+    console.log('🔍 DEBUG - URL:', url);
 
     // Calls ai.routes.js → processEventRequest() in ai.controller.js
     const response = await axios.post(
-      `${AI_AGENT_URL}/api/v1/ai/process-event-request`,
+      url,
       aiRequest,
       {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 30000
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 120000
       }
     );
 
-    console.log('✅ AI Agent response successful:', response.status);
+    console.log('✅ AI response received');
 
-    return {
+    // FIX 2: Format the response properly
+    const formattedResponse = {
       aiEnabled: true,
       success: true,
-      data: response.data,
+      data: {
+        extractedEntities: response.data.extractedEntities || {},
+        matchedOrganizers: response.data.matchedOrganizers || [],
+        budgetAnalysis: response.data.budgetAnalysis || {},
+        aiSuggestions: response.data.aiSuggestions || {}
+      },
       processingTime: new Date().toISOString()
     };
+
+    console.log('✅ Formatted AI insights:', {
+      hasExtractedEntities: !!formattedResponse.data.extractedEntities,
+      matchedCount: formattedResponse.data.matchedOrganizers.length,
+      hasBudgetAnalysis: !!formattedResponse.data.budgetAnalysis
+    });
+
+    return formattedResponse;
   } catch (error) {
     console.error('AI Agent Service Error:', error.message);
     console.error('   - Status:', error.response?.status);
-    console.error('   - Status Text:', error.response?.statusText);
-    console.error('   - Response Data:', error.response?.data);
+    console.error('   - URL attempted:', error.config?.url);
+    
     return {
       aiEnabled: true,
       success: false,
@@ -107,38 +129,61 @@ export const createEventRequest = async (req, res) => {
   try {
     const { useAI = false, naturalLanguage = null } = req.body;
 
-    // 1. Save the event request
-    const eventRequest = await new EventRequest({
+    console.log('Creating event request with useAI:', useAI);
+
+    // 1. Create Event Request - SAVE IT FIRST
+    const eventRequest = new EventRequest({
       ...req.body,
       userId: req.user._id,
       status: 'open'
-    }).save();
+    });
+    
+    // Save the initial event request
+    await eventRequest.save();
+    console.log('✅ Event request saved with ID:', eventRequest._id);
 
-    // 2. Call AI service if requested and enabled
-    let aiInsights = null;
+    // 2. Call AI Service if requested
+    let aiInsightsResult = null;
     if (useAI && AI_ENABLED) {
-      aiInsights = await callAIAgent(req.body, req.user._id, naturalLanguage);
+      aiInsightsResult = await callAIAgent(req.body, req.user._id, naturalLanguage);
 
-      if (aiInsights.success) {
-        eventRequest.aiInsights = {
-          processed: true,
-          matchedOrganizers: aiInsights.data?.matchedOrganizers?.slice(0, 5) || [],
-          budgetAnalysis: aiInsights.data?.budgetAnalysis || {},
-          suggestions: aiInsights.data?.aiSuggestions || {},
-          processingTime: aiInsights.processingTime
-        };
-        await eventRequest.save();
+      // Store AI insights in event request metadata
+      if (aiInsightsResult.success) {
+        // Update the event request with AI insights
+        const updatedEventRequest = await EventRequest.findByIdAndUpdate(
+          eventRequest._id,
+          {
+            $set: {
+              aiInsights: {
+                processed: true,
+                matchedOrganizers: aiInsightsResult.data?.matchedOrganizers?.slice(0, 5) || [],
+                budgetAnalysis: aiInsightsResult.data?.budgetAnalysis || {},
+                suggestions: aiInsightsResult.data?.aiSuggestions || {},
+                processingTime: aiInsightsResult.processingTime,
+                extractedEntities: aiInsightsResult.data?.extractedEntities || {}
+              }
+            }
+          },
+          { new: true } // Return the updated document
+        );
+        
+        console.log('✅ AI insights saved to database');
+        
+        // Use the updated version
+        eventRequest.aiInsights = updatedEventRequest.aiInsights;
+      } else {
+        console.log('⚠️ AI processing failed:', aiInsightsResult.error);
       }
     }
 
-    // 3. Create notification for organizers
+    // 3. Create Notification
     const organizerRole = await Role.findOne({ role_Name: 'Organizer' }).lean();
 
     const notification = await Notification.create({
       message: `New ${req.body.eventType} request`,
       type: 'new_event_request',
-      eventRequestId: eventRequest._id,
       forRole: organizerRole._id,
+      eventRequestId: eventRequest._id,
       status: 'unread',
       metadata: {
         eventRequest: {
@@ -147,12 +192,10 @@ export const createEventRequest = async (req, res) => {
           date: req.body.date,
           budget: req.body.budget
         },
-        aiInsights: aiInsights?.success
-          ? {
-              budgetFeasibility: aiInsights.data?.budgetAnalysis?.feasibility,
-              organizerMatches: aiInsights.data?.matchedOrganizers?.length || 0
-            }
-          : undefined
+        aiInsights: aiInsightsResult?.success ? {
+          budgetFeasibility: aiInsightsResult.data?.budgetAnalysis?.feasibility,
+          organizerMatches: aiInsightsResult.data?.matchedOrganizers?.length || 0
+        } : undefined
       }
     });
 
@@ -163,24 +206,32 @@ export const createEventRequest = async (req, res) => {
       payload: {
         notification: notification.toObject(),
         eventRequest: eventRequest.toObject(),
-        aiEnhanced: aiInsights?.success || false
+        aiEnhanced: aiInsightsResult?.success || false
       }
     });
 
-    res.status(201).json(
-      createResponse(true, 'Event request created successfully', {
-        eventRequest,
+    // Fetch the final event request to ensure we have the latest data
+    const finalEventRequest = await EventRequest.findById(eventRequest._id);
+
+    res.status(201).json(createResponse(
+      true,
+      'Event request created successfully',
+      {
+        eventRequest: finalEventRequest,
         notification,
-        aiInsights: aiInsights?.success
-          ? {
-              enabled: true,
-              matchedOrganizers: aiInsights.data?.matchedOrganizers?.slice(0, 5),
-              budgetAnalysis: aiInsights.data?.budgetAnalysis,
-              suggestions: aiInsights.data?.aiSuggestions
-            }
-          : { enabled: false, message: 'AI processing not requested or failed' }
-      })
-    );
+        aiInsights: aiInsightsResult?.success ? {
+          enabled: true,
+          matchedOrganizers: aiInsightsResult.data?.matchedOrganizers?.slice(0, 5),
+          budgetAnalysis: aiInsightsResult.data?.budgetAnalysis,
+          suggestions: aiInsightsResult.data?.aiSuggestions,
+          extractedEntities: aiInsightsResult.data?.extractedEntities
+        } : {
+          enabled: false,
+          message: 'AI processing not requested or failed'
+        }
+      }
+    ));
+
   } catch (error) {
     console.error('Error creating event request:', error);
     res.status(500).json(

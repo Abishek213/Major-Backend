@@ -1,98 +1,105 @@
 // user.schema.js
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
     fullname: { type: String, required: true, trim: true },
-    email: { 
-      type: String, 
-      required: true, 
-      unique: true, 
-      trim: true, 
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
       lowercase: true,
-      match: [/^\S+@\S+\.\S+$/, 'Invalid email format.'] 
+      match: [/^\S+@\S+\.\S+$/, "Invalid email format."],
     },
     password: { type: String, required: true, minlength: 6 },
     contactNo: {
       type: String,
       required: true,
       trim: true,
-      match: [/^\+?[\d\s-]{10,}$/, 'Invalid contact number format.']
+      match: [/^\+?[\d\s-]{10,}$/, "Invalid contact number format."],
     },
-    role: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'Role', 
-      required: true 
+    role: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Role",
+      required: true,
     },
     profileImage: {
       type: String,
-      default: null
+      default: null,
     },
-    wishlist: [{
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Event',
-      default: []
-    }],
-
-
-    // ===== NEW ORGANIZER FIELDS =====
-    // These will only be used if user has role = Organizer
+    wishlist: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Event",
+        default: [],
+      },
+    ],
+    googleId: { type: String, sparse: true, unique: true },
+    authProvider: { type: String, enum: ["local", "google"], default: "local" },
+    isEmailVerified: { type: Boolean, default: false },
+    isMobileVerified: { type: Boolean, default: false },
+    emailVerificationOTP: { type: String },
+    mobileVerificationOTP: { type: String },
+    otpExpiry: { type: Date },
+    emailSubscribed: { type: Boolean, default: true },
+    notificationPreferences: {
+      soundEnabled: { type: Boolean, default: true },
+      toastEnabled: { type: Boolean, default: true },
+      // Add more preferences here as needed
+    },
     organizerDetails: {
-      // Professional Info
-      businessName: { type: String, default: null },
-      businessRegistration: { type: String, default: null },
-      yearsOfExperience: { type: Number, default: 0 },
-      
-      // Service Details
+      // PROFESSIONAL IDENTITY (Required - makes them look legit)
+      businessName: { type: String, required:function() { return this.role === 'Organizer'; } },
+      contactPerson: { type: String, required:function() { return this.role === 'Organizer'; }},  // Their name
+      contactPhone: { type: String, required:function() { return this.role === 'Organizer'; }},    // Direct line
+      establishedYear: { type: Number },                  // Optional trust signal
+
+      // MATCHING DATA (Required for AI)
       expertise: [{
         type: String,
-        enum: ['wedding', 'birthday', 'corporate', 'conference', 'party', 
-               'anniversary', 'workshop', 'concert', 'festival', 'general'],
-        default: []
+        enum: ['wedding', 'birthday', 'corporate', 'conference', 'party',
+          'anniversary', 'workshop', 'concert', 'festival'],
+        required:function() { return this.role === 'Organizer'; }
       }],
-      
+
       serviceAreas: [{
-        city: String,
-        distance: Number // max distance willing to travel (km)
+        city: {
+          type: String,
+          required:function() { return this.role === 'Organizer'; },
+          enum: ['Kathmandu', 'Lalitpur', 'Bhaktapur', 'Pokhara', 'Chitwan',
+            'Biratnagar', 'Butwal', 'Nepalgunj', 'Dharan', 'Other']
+        }
       }],
-      
-      // Pricing
-      priceRange: {
-        min: { type: Number, default: 0 },
-        max: { type: Number, default: 0 },
-        currency: { type: String, default: 'NPR' }
+
+      // PRICING (Optional - their choice)
+      pricing: {
+        wedding: { min: Number, max: Number },
+        birthday: { min: Number, max: Number },
+        corporate: { min: Number, max: Number }
+        // They only fill what they selected in expertise
       },
-      
-      pricingModel: {
-        type: String,
-        enum: ['fixed', 'per_person', 'custom'],
-        default: 'custom'
-      },
-      
-      // Performance Metrics
-      rating: { type: Number, default: 0, min: 0, max: 5 },
-      totalReviews: { type: Number, default: 0 },
+
+      // AUTO-CALCULATED (No work for them)
+      rating: { type: Number, default: 0 },
       totalEvents: { type: Number, default: 0 },
-      
-      // Availability
       responseTime: { type: String, default: '24h' },
-      
-      // Verification
-      isVerified: { type: Boolean, default: false },
-      autoMatchEnabled: { type: Boolean, default: true }
+
+      // VERIFICATION (Admin work, not theirs)
+      isVerified: { type: Boolean, default: false }
     }
 
 
   },
-  { timestamps: true } 
+  { timestamps: true }
 );
-// Indexes for efficient querying
-userSchema.index({ 'organizerDetails.expertise': 1 });
-userSchema.index({ 'organizerDetails.serviceAreas.city': 1 });
-userSchema.index({ 'organizerDetails.priceRange.min': 1, 'organizerDetails.priceRange.max': 1 });
-userSchema.index({ 'organizerDetails.rating': -1 });
+userSchema.index({ "organizerDetails.expertise": 1 });
+userSchema.index({ "organizerDetails.serviceAreas.city": 1 });
+userSchema.index({
+  "organizerDetails.priceRange.min": 1,
+  "organizerDetails.priceRange.max": 1,
+});
+userSchema.index({ "organizerDetails.rating": -1 });
 
-
-
-const User = mongoose.model('User', userSchema);
+const User = mongoose.model("User", userSchema);
 export default User;
