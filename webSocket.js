@@ -233,11 +233,6 @@ class WebSocketManager {
 
     ws.on("pong", () => {
       isAlive = true;
-      log.info(
-        "PING/PONG",
-        `Pong received ✓`,
-        `id=${connectionId}  userId=${client.userId}`
-      );
     });
 
     this.clients.set(ws, { ...client, ws });
@@ -273,11 +268,6 @@ class WebSocketManager {
         return;
       }
       isAlive = false;
-      log.info(
-        "PING",
-        `Sending ping`,
-        `id=${connectionId}  userId=${client.userId}`
-      );
       ws.ping();
     }, 30_000);
 

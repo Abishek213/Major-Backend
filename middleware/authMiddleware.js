@@ -1,4 +1,3 @@
-// authMiddleware.js
 import jwt from 'jsonwebtoken';
 import User from '../model/user.schema.js';
 
@@ -19,10 +18,18 @@ export const authenticateUser = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Find the user associated with the token
-    const user = await User.findById(decoded.user.id).select("-password");
+    // FIX: Support both token shapes for a smooth transition:
+    //   New shape (signup + fixed login): { userId, role }
+    //   Old shape (login before fix):     { user: { id, fullname, email, role } }
+    const userId = decoded.userId || decoded.user?.id;
 
-    
+    if (!userId) {
+      return res.status(401).json({ message: 'Authorization denied: Invalid token payload' });
+    }
+
+    // Find the user associated with the token
+    const user = await User.findById(userId).select('-password');
+
     if (!user) {
       return res.status(401).json({ message: 'Authorization denied: User not found' });
     }

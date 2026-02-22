@@ -17,6 +17,7 @@ import seedOrganizerDashboard from "./seeders/organizerDashboardSeeder.js";
 import seedplannerAgents from "./seeders/planningAgentSeeder.js";
 // import seedAIPlanner from "./seeders/aiplannerSeeder.js";
 
+import authRoute from "./routes/auth.routes.js";
 import eventRoutes from "./routes/Event.routes.js";
 import userRoute from "./routes/user.route.js";
 import bookingRoutes from "./routes/booking.routes.js";
@@ -39,6 +40,8 @@ wsManager.initialize(server);
 const allowedOrigins = [
   "https://eventa-puce.vercel.app",
   "http://localhost:5173",
+  "https://e-venta-qv4a.vercel.app",
+  "http://52.70.70.109:3000",
 ];
 
 app.use((req, res, next) => {
@@ -121,6 +124,7 @@ app.use(
 );
 
 // API Routes
+app.use("/api/v1/auth", authRoute);
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/users", userRoute);
 app.use("/api/v1/bookings", bookingRoutes);

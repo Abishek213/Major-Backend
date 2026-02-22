@@ -1,5 +1,5 @@
 // user.schema.js
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
@@ -10,33 +10,44 @@ const userSchema = new mongoose.Schema(
       unique: true,
       trim: true,
       lowercase: true,
-      match: [/^\S+@\S+\.\S+$/, 'Invalid email format.']
+      match: [/^\S+@\S+\.\S+$/, "Invalid email format."],
     },
     password: { type: String, required: true, minlength: 6 },
     contactNo: {
       type: String,
       required: true,
       trim: true,
-      match: [/^\+?[\d\s-]{10,}$/, 'Invalid contact number format.']
+      match: [/^\+?[\d\s-]{10,}$/, "Invalid contact number format."],
     },
     role: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Role',
-      required: true
+      ref: "Role",
+      required: true,
     },
     profileImage: {
       type: String,
-      default: null
+      default: null,
     },
-    wishlist: [{
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Event',
-      default: []
-    }],
-
-
-    // ===== NEW ORGANIZER FIELDS =====
-    // These will only be used if user has role = Organizer
+    wishlist: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Event",
+        default: [],
+      },
+    ],
+    googleId: { type: String, sparse: true, unique: true },
+    authProvider: { type: String, enum: ["local", "google"], default: "local" },
+    isEmailVerified: { type: Boolean, default: false },
+    isMobileVerified: { type: Boolean, default: false },
+    emailVerificationOTP: { type: String },
+    mobileVerificationOTP: { type: String },
+    otpExpiry: { type: Date },
+    emailSubscribed: { type: Boolean, default: true },
+    notificationPreferences: {
+      soundEnabled: { type: Boolean, default: true },
+      toastEnabled: { type: Boolean, default: true },
+      // Add more preferences here as needed
+    },
     organizerDetails: {
       // PROFESSIONAL IDENTITY (Required - makes them look legit)
       businessName: { type: String, required:function() { return this.role === 'Organizer'; } },
@@ -82,13 +93,13 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-// Indexes for efficient querying
-userSchema.index({ 'organizerDetails.expertise': 1 });
-userSchema.index({ 'organizerDetails.serviceAreas.city': 1 });
-userSchema.index({ 'organizerDetails.priceRange.min': 1, 'organizerDetails.priceRange.max': 1 });
-userSchema.index({ 'organizerDetails.rating': -1 });
+userSchema.index({ "organizerDetails.expertise": 1 });
+userSchema.index({ "organizerDetails.serviceAreas.city": 1 });
+userSchema.index({
+  "organizerDetails.priceRange.min": 1,
+  "organizerDetails.priceRange.max": 1,
+});
+userSchema.index({ "organizerDetails.rating": -1 });
 
-
-
-const User = mongoose.model('User', userSchema);
+const User = mongoose.model("User", userSchema);
 export default User;
