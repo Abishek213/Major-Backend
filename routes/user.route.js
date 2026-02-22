@@ -1,7 +1,5 @@
 import express from "express";
 import {
-  signup,
-  login,
   getUserByEmail,
   getAllUsers,
   addToWishlist,
@@ -16,10 +14,6 @@ import {
 import { authenticateUser } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
-
-// Public routes
-router.post("/signup", signup);
-router.post("/login", login);
 
 // Protected routes - using the existing protect middleware
 router.get("/email/:email", authenticateUser, getUserByEmail);
