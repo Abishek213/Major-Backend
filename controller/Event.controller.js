@@ -9,6 +9,45 @@ import AI_Agent from "../model/ai_agent.schema.js";
 import Review from "../model/review.schema.js";
 import AI_FeedbackSentiment from "../model/ai_feedbackSentiment.schema.js";
 
+const LIVE_STATUSES = new Set(["upcoming", "ongoing", "completed"]);
+
+const computeLiveStatus = (eventDate) => {
+  const now = new Date();
+  const evtDate = new Date(eventDate);
+  // Use date-only comparison so an event is "ongoing" for the whole day
+  const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const evtDay = new Date(
+    evtDate.getFullYear(),
+    evtDate.getMonth(),
+    evtDate.getDate()
+  );
+
+  if (evtDay.getTime() === nowDay.getTime()) return "ongoing";
+  if (evtDay < nowDay) return "completed";
+  return "upcoming";
+};
+
+const syncEventStatuses = async (events) => {
+  const bulkOps = [];
+  for (const event of events) {
+    if (!LIVE_STATUSES.has(event.status)) continue; // skip pending/rejected/cancelled
+    const correct = computeLiveStatus(event.event_date);
+    if (correct !== event.status) {
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: event._id },
+          update: { $set: { status: correct } },
+        },
+      });
+    }
+  }
+  if (bulkOps.length > 0) {
+    await Event.bulkWrite(bulkOps).catch((err) =>
+      console.warn("syncEventStatuses bulkWrite error:", err.message)
+    );
+  }
+};
+
 export const createEvent = async (req, res) => {
   try {
     const { org_ID, category } = req.body;
@@ -55,7 +94,7 @@ export const createEvent = async (req, res) => {
       org_ID,
       totalSlots: req.body.totalSlots,
       isPublic: req.body.isPublic !== undefined ? req.body.isPublic : false,
-      status: organizer.isApproved ? "active" : "pending",
+      status: "pending", // always requires admin approval regardless of organizer status
       attendees: [],
     });
 
@@ -78,7 +117,6 @@ export const createEvent = async (req, res) => {
   }
 };
 
-// Image upload route
 export const uploadEventImage = async (req, res) => {
   try {
     const image = req.files?.image;
@@ -232,7 +270,6 @@ export const getEventById = async (req, res) => {
   }
 };
 
-// Update an event
 export const updateEvent = async (req, res) => {
   try {
     const updateData = { ...req.body };
@@ -284,7 +321,6 @@ export const deleteEvent = async (req, res) => {
   }
 };
 
-//eventdetails
 export const registerForEvent = async (req, res) => {
   try {
     const { id } = req.params;
@@ -412,7 +448,8 @@ export const getSimilarEvents = async (req, res) => {
       _id: { $ne: id },
       category: event.category._id,
       event_date: { $gte: new Date() },
-      status: "upcoming",
+      status: { $in: ["upcoming", "ongoing"] },
+      isPublic: true,
     })
       .populate("org_ID", "fullname email")
       .populate("category")
@@ -441,7 +478,10 @@ export const getEvents = async (req, res) => {
   } = req.query;
 
   try {
-    const query = { status: "approved" };
+    const query = {
+      status: { $in: ["upcoming", "ongoing", "completed"] },
+      isPublic: true,
+    };
 
     if (search) {
       query.$or = [
@@ -456,22 +496,15 @@ export const getEvents = async (req, res) => {
 
     // Handle parent category filtering
     if (parentCategory && mongoose.Types.ObjectId.isValid(parentCategory)) {
-      // First, find all child categories of the parent
       const childCategories = await Category.find({
         parentCategory: new mongoose.Types.ObjectId(parentCategory),
       });
-
-      // Create an array of category IDs including parent and all children
       const categoryIds = [
         new mongoose.Types.ObjectId(parentCategory),
         ...childCategories.map((cat) => cat._id),
       ];
-
-      // Update query to match any of these categories
       query.category = { $in: categoryIds };
-    }
-    // Handle specific category filtering (existing logic)
-    else if (category && mongoose.Types.ObjectId.isValid(category)) {
+    } else if (category && mongoose.Types.ObjectId.isValid(category)) {
       query.category = new mongoose.Types.ObjectId(category);
     }
 
@@ -508,7 +541,8 @@ export const getEvents = async (req, res) => {
       .populate("attendees", "fullname email")
       .sort({ event_date: 1 });
 
-    // Add category hierarchy information to the response
+    syncEventStatuses(events);
+
     const eventsWithCategoryInfo = events.map((event) => {
       const eventObj = event.toObject();
       if (eventObj.category && eventObj.category.parentCategory) {
@@ -531,7 +565,6 @@ export const getEvents = async (req, res) => {
   }
 };
 
-// New function to get events by parent category
 export const getEventsByParentCategory = async (req, res) => {
   try {
     const { parentCategoryId } = req.params;
@@ -593,11 +626,6 @@ export const getEventsByParentCategory = async (req, res) => {
   }
 };
 
-// ========================
-// NEW AI FUNCTIONS
-// ========================
-
-// NEW FUNCTION: Get AI recommended events for current user
 export const getAIRecommendedEvents = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -611,7 +639,8 @@ export const getAIRecommendedEvents = async (req, res) => {
     if (!hasRecommendations) {
       // If no recommendations, return popular events
       const popularEvents = await Event.find({
-        status: "approved",
+        status: { $in: ["upcoming", "ongoing"] },
+        isPublic: true,
         event_date: { $gte: new Date() },
       })
         .populate("org_ID", "fullname email")
@@ -633,7 +662,8 @@ export const getAIRecommendedEvents = async (req, res) => {
       .populate({
         path: "event_id",
         match: {
-          status: "approved",
+          status: { $in: ["upcoming", "ongoing"] },
+          isPublic: true,
           event_date: { $gte: new Date() },
         },
         populate: [
@@ -670,7 +700,6 @@ export const getAIRecommendedEvents = async (req, res) => {
   }
 };
 
-// NEW FUNCTION: Generate AI recommendations (for AI service to call)
 export const generateEventRecommendations = async (req, res) => {
   try {
     const { userId, events } = req.body;
@@ -765,7 +794,6 @@ export const generateEventRecommendations = async (req, res) => {
   }
 };
 
-// NEW FUNCTION: Get event sentiment analysis
 export const getEventSentimentAnalysis = async (req, res) => {
   try {
     const { id } = req.params;

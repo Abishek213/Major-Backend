@@ -1,4 +1,3 @@
-// Backend/seeders/organizerDashboard.seeder.js
 import mongoose from "mongoose";
 import bcryptjs from "bcryptjs";
 import User from "../model/user.schema.js";
@@ -43,6 +42,11 @@ const CATEGORY_NAMES = [
   "Food & Drink",
   "Health & Wellness",
   "Education",
+  "Concert", // added for Indie Music Night
+  "Outdoor Sports", // added for Trail Running Challenge
+  "Festival", // added for Street Photography Walk
+  "Console Gaming", // added for Retro Gaming Expo
+  "Indoor Sports", // already used in templates
 ];
 
 const AGENTS_SEED = [
@@ -91,6 +95,15 @@ const ATTENDEE_EMAILS = Array.from({ length: 10 }, (_, i) => ({
   contactNo: `980000000${i + 1}`,
 }));
 
+// Names of past events that should be handled by bookingreviewSeeder
+const PAST_EVENT_NAMES = new Set([
+  "Indie Music Night",
+  "Data Science Bootcamp",
+  "Trail Running Challenge",
+  "Street Photography Walk",
+  "Retro Gaming Expo",
+]);
+
 /**
  * Event templates.
  * past: true  → event_date in the past, status: 'completed'
@@ -111,7 +124,7 @@ const EVENT_TEMPLATES = [
     totalSlots: 300,
     status: "completed",
     past: true,
-    fillPercent: 0.88, // 88% filled
+    fillPercent: 0.88,
   },
   {
     event_name: "Himalayan Music Festival",
@@ -171,7 +184,7 @@ const EVENT_TEMPLATES = [
     totalSlots: 150,
     status: "completed",
     past: true,
-    fillPercent: 0.6, // intentionally low for warning insight
+    fillPercent: 0.6,
   },
 
   // ── UPCOMING EVENTS (high fill — success insights) ──
@@ -186,7 +199,7 @@ const EVENT_TEMPLATES = [
     categoryName: "Technology",
     tags: ["AI", "machine-learning", "python", "tensorflow", "hands-on"],
     totalSlots: 50,
-    status: "approved",
+    status: "upcoming",
     past: false,
     fillPercent: 0.86,
   },
@@ -201,7 +214,7 @@ const EVENT_TEMPLATES = [
     categoryName: "Food & Drink",
     tags: ["cooking", "culinary", "newari", "masterclass", "food"],
     totalSlots: 30,
-    status: "approved",
+    status: "upcoming",
     past: false,
     fillPercent: 0.9,
   },
@@ -216,7 +229,7 @@ const EVENT_TEMPLATES = [
     categoryName: "Sports",
     tags: ["marathon", "trail", "running", "fitness", "outdoors"],
     totalSlots: 200,
-    status: "approved",
+    status: "upcoming",
     past: false,
     fillPercent: 0.78,
   },
@@ -235,7 +248,7 @@ const EVENT_TEMPLATES = [
     totalSlots: 120,
     status: "upcoming",
     past: false,
-    fillPercent: 0.22, // low — triggers warning
+    fillPercent: 0.22,
   },
   {
     event_name: "EdTech & Future of Learning Summit",
@@ -250,11 +263,89 @@ const EVENT_TEMPLATES = [
     totalSlots: 250,
     status: "pending",
     past: false,
-    fillPercent: 0.18, // very low
+    fillPercent: 0.18,
+  },
+
+  // ── SPECIAL PAST EVENTS (from bookingreviewSeeder) ──
+  // These will be created, but bookings will NOT be auto-generated here.
+  {
+    event_name: "Indie Music Night",
+    description:
+      "An intimate evening of indie and alternative music by local bands.",
+    daysOffset: -20,
+    time: "7:00 PM",
+    location: "The Underground Club",
+    price: 30.0,
+    categoryName: "Concert",
+    tags: ["indie", "music", "live", "band"],
+    totalSlots: 200,
+    status: "completed",
+    past: true,
+    fillPercent: 0.5,
+  },
+  {
+    event_name: "Data Science Bootcamp",
+    description:
+      "Intensive one-day bootcamp covering ML fundamentals and hands-on projects.",
+    daysOffset: -35,
+    time: "9:00 AM",
+    location: "Tech Hub Auditorium",
+    price: 199.0,
+    categoryName: "Education",
+    tags: ["datascience", "machinelearning", "bootcamp", "python"],
+    totalSlots: 100,
+    status: "completed",
+    past: true,
+    fillPercent: 0.6,
+  },
+  {
+    event_name: "Trail Running Challenge",
+    description:
+      "Scenic trail run through the national park with 10K and 21K categories.",
+    daysOffset: -50,
+    time: "6:30 AM",
+    location: "Shivapuri National Park",
+    price: 45.0,
+    categoryName: "Outdoor Sports",
+    tags: ["trail", "running", "marathon", "outdoors"],
+    totalSlots: 500,
+    status: "completed",
+    past: true,
+    fillPercent: 0.4,
+  },
+  {
+    event_name: "Street Photography Walk",
+    description:
+      "Guided photography walk through heritage streets with a professional photographer.",
+    daysOffset: -15,
+    time: "5:30 AM",
+    location: "Asan Bazaar",
+    price: 20.0,
+    categoryName: "Festival",
+    tags: ["photography", "walk", "street", "heritage"],
+    totalSlots: 40,
+    status: "completed",
+    past: true,
+    fillPercent: 0.3,
+  },
+  {
+    event_name: "Retro Gaming Expo",
+    description:
+      "A nostalgia-packed expo featuring classic console games and retro arcade machines.",
+    daysOffset: -60,
+    time: "11:00 AM",
+    location: "City Expo Center",
+    price: 35.0,
+    categoryName: "Console Gaming",
+    tags: ["gaming", "retro", "expo", "arcade"],
+    totalSlots: 300,
+    status: "completed",
+    past: true,
+    fillPercent: 0.5,
   },
 ];
 
-// Review comment banks by sentiment tier
+// Review comment banks (unchanged)
 const POSITIVE_COMMENTS = [
   "Absolutely phenomenal event! The organisation was flawless and every speaker delivered real value.",
   "Best event I have attended in Kathmandu. Will definitely be back next year.",
@@ -287,7 +378,6 @@ const NEGATIVE_COMMENTS = [
   "Several advertised speakers cancelled last minute with no substitutes arranged.",
 ];
 
-// Detected issues mapped to sentiment tier
 const ISSUE_POOL = {
   negative: [
     "long queues",
@@ -331,6 +421,16 @@ const seedOrganizerDashboard = async () => {
     return;
   }
   console.log(`Found organizer: ${organizer.fullname} (${organizer._id})`);
+
+  // ── 1b. Find regular user (user@gmail.com) ───────────────────────────────
+  const regularUser = await User.findOne({ email: "user@gmail.com" });
+  if (!regularUser) {
+    console.warn("⚠  user@gmail.com not found. Run the user seeder first.");
+  } else {
+    console.log(
+      `Found regular user: ${regularUser.fullname} (${regularUser._id})`
+    );
+  }
 
   // ── 2. Find User role for attendees ─────────────────────────────────────
   const userRole = await Role.findOne({ role_Name: "User" });
@@ -415,12 +515,22 @@ const seedOrganizerDashboard = async () => {
 
       const bookedSlots = Math.floor(tmpl.totalSlots * tmpl.fillPercent);
       // Pick attendees (repeat if needed for large events)
-      const selectedAttendees = Array.from(
-        { length: Math.min(bookedSlots, attendeeIds.length) },
+      let selectedAttendees = Array.from(
+        { length: Math.min(bookedSlots, attendeeIds.length * 2) },
         (_, i) => attendeeIds[i % attendeeIds.length]
       );
 
-      // Use collection.insertOne to bypass the future-date validator for past events
+      // For special past events, ensure regularUser is in attendees
+      if (PAST_EVENT_NAMES.has(tmpl.event_name) && regularUser) {
+        if (
+          !selectedAttendees.some(
+            (id) => id.toString() === regularUser._id.toString()
+          )
+        ) {
+          selectedAttendees.push(regularUser._id);
+        }
+      }
+
       const eventDoc = {
         _id: new mongoose.Types.ObjectId(),
         event_name: tmpl.event_name,
@@ -444,7 +554,12 @@ const seedOrganizerDashboard = async () => {
       };
 
       // Bypass schema validators for past events via raw collection insert
-      await Event.collection.insertOne(eventDoc);
+      if (tmpl.past) {
+        await Event.collection.insertOne(eventDoc);
+      } else {
+        await Event.create(eventDoc);
+      }
+
       const event = await Event.findById(eventDoc._id);
       seededEvents.push({ event, template: tmpl });
       stats.events.created++;
@@ -459,6 +574,11 @@ const seedOrganizerDashboard = async () => {
 
   // ── 7. Seed bookings ─────────────────────────────────────────────────────
   for (const { event, template } of seededEvents) {
+    // Skip special past events – they will be handled by bookingreviewSeeder
+    if (PAST_EVENT_NAMES.has(template.event_name)) {
+      continue;
+    }
+
     const bookedSlots = Math.floor(template.totalSlots * template.fillPercent);
     const bookingCount = Math.min(bookedSlots, attendeeIds.length * 2);
 
@@ -473,7 +593,6 @@ const seedOrganizerDashboard = async () => {
         continue;
       }
 
-      // Past events: mostly completed; upcoming: mix of pending/completed
       const paymentStatus = isPast
         ? pick(["completed", "completed", "completed", "completed", "refunded"])
         : pick(["completed", "completed", "pending"]);
@@ -481,8 +600,8 @@ const seedOrganizerDashboard = async () => {
       const paymentMethod = pick(["Khalti", "eSewa"]);
 
       const bookingDate = isPast
-        ? daysFrom(template.daysOffset - randInt(5, 30)) // booked before event
-        : daysFrom(-randInt(1, 10)); // recently booked
+        ? daysFrom(template.daysOffset - randInt(5, 30))
+        : daysFrom(-randInt(1, 10));
 
       await Booking.collection.insertOne({
         _id: new mongoose.Types.ObjectId(),
@@ -516,22 +635,21 @@ const seedOrganizerDashboard = async () => {
   }
 
   // ── 8. Seed reviews (past/completed events only) ─────────────────────────
-  // Sentiment distribution per event (drives realistic score spread)
   const SENTIMENT_PROFILES = [
-    { positive: 0.75, neutral: 0.18, negative: 0.07 }, // very positive event
-    { positive: 0.8, neutral: 0.15, negative: 0.05 }, // excellent
-    { positive: 0.55, neutral: 0.3, negative: 0.15 }, // decent
-    { positive: 0.6, neutral: 0.25, negative: 0.15 }, // mixed
-    { positive: 0.4, neutral: 0.3, negative: 0.3 }, // poor — low fill event
+    { positive: 0.75, neutral: 0.18, negative: 0.07 },
+    { positive: 0.8, neutral: 0.15, negative: 0.05 },
+    { positive: 0.55, neutral: 0.3, negative: 0.15 },
+    { positive: 0.6, neutral: 0.25, negative: 0.15 },
+    { positive: 0.4, neutral: 0.3, negative: 0.3 },
   ];
 
   const pastEvents = seededEvents.filter(({ template }) => template.past);
-  const seededReviews = []; // { review, sentimentTier }
+  const seededReviews = [];
 
   for (let ei = 0; ei < pastEvents.length; ei++) {
     const { event, template } = pastEvents[ei];
     const profile = SENTIMENT_PROFILES[ei % SENTIMENT_PROFILES.length];
-    const reviewCount = Math.floor(event.attendees.length * 0.4); // ~40% of attendees leave reviews
+    const reviewCount = Math.floor(event.attendees.length * 0.4);
 
     const shuffledAttendees = shuffle(attendeeIds);
 
@@ -549,7 +667,6 @@ const seedOrganizerDashboard = async () => {
         continue;
       }
 
-      // Determine sentiment tier
       const roll = Math.random();
       let tier, rating, comment;
 
@@ -573,7 +690,7 @@ const seedOrganizerDashboard = async () => {
           : -randInt(1, 20)
       );
 
-      const review = await Review.collection.insertOne({
+      const result = await Review.collection.insertOne({
         _id: new mongoose.Types.ObjectId(),
         userId,
         eventId: event._id,
@@ -584,7 +701,7 @@ const seedOrganizerDashboard = async () => {
       });
 
       seededReviews.push({
-        review: { _id: review.insertedId },
+        review: { _id: result.insertedId },
         sentimentTier: tier,
       });
       stats.reviews.created++;
@@ -601,10 +718,6 @@ const seedOrganizerDashboard = async () => {
       continue;
     }
 
-    // Score ranges:
-    //   positive → 0.35 to 1.0
-    //   neutral  → -0.30 to 0.34
-    //   negative → -1.0 to -0.31
     let sentiment_score;
     const issues = [];
 

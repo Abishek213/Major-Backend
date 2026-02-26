@@ -25,7 +25,7 @@ router.get('/event-requests-for-user', authenticateUser, getEventRequestsForUser
 router.put('/event-request/select-organizer', authenticateUser, selectOrganizer); // Route to select an organizer for the event request
 router.post('/eventrequest-respond/:id', authenticateUser, respondToEventRequest);  // Route for an organizer to express interest in an event
 router.put('/event-request/:eventId/accept', authenticateUser, acceptEventRequest);  // Route for an organizer to accept an event request
-router.put('/event-request/:eventId/reject', authenticateUser, rejectEventRequest);  // Route for an organizer to reject an event request
+router.put('/event-request/:eventId/reject', authenticateUser, rejectEventRequest);
 
 router.get('/with-ai-insights/:id', authenticateUser, getEventRequestWithAIInsights);
 router.get('/ai-suggestions/:id', authenticateUser, getAISuggestedOrganizers);

@@ -15,12 +15,14 @@ import seedRolePermissions from "./seeders/rolePermissionSeeder.js";
 import seedAIAgents from "./seeders/aiSeeder.js";
 import seedOrganizerDashboard from "./seeders/organizerDashboardSeeder.js";
 import seedplannerAgents from "./seeders/planningAgentSeeder.js";
+import seedbookingReview from "./seeders/bookingreviewSeeder.js";
 // import seedAIPlanner from "./seeders/aiplannerSeeder.js";
 
 import authRoute from "./routes/auth.routes.js";
 import eventRoutes from "./routes/Event.routes.js";
 import userRoute from "./routes/user.route.js";
 import bookingRoutes from "./routes/booking.routes.js";
+import reviewRoutes from "./routes/review.routes.js";
 import roleRoute from "./routes/role.route.js";
 import adminRoutes from "./routes/admin.routes.js";
 import categoriesRoutes from "./routes/categories.routes.js";
@@ -98,6 +100,7 @@ const connectDB = async () => {
       await seedAIAgents();
       await seedOrganizerDashboard();
       await seedplannerAgents();
+      await seedbookingReview();
       // await seedAIPlanner();
 
       console.log("Database seeding completed.");
@@ -127,6 +130,7 @@ app.use("/api/v1/auth", authRoute);
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/users", userRoute);
 app.use("/api/v1/bookings", bookingRoutes);
+app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/roles", roleRoute);
 app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
