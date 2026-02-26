@@ -12,9 +12,11 @@ const eventRequestSchema = new mongoose.Schema({
     {
       organizerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       message: { type: String },
-      status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' },
+      status: { type: String, enum: ['pending', 'accepted', 'rejected','countered'], default: 'pending' },
       responseDate: { type: Date, default: Date.now },
       proposedBudget: { type: Number },
+          negotiationId: { type: mongoose.Schema.Types.ObjectId, ref: 'AI_NegotiationLog' }
+
     }
   ],
 

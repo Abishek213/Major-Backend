@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
       type: String, 
       required: true,
       enum: ['event_request', 'event_response', 'event_update', 
-             'system_notification', 'profile_update', 'new_event_request', 'event_request_accepted']
+             'system_notification', 'profile_update', 'new_event_request', 'event_request_accepted','offer_accepted', 'offer_rejected','counter_offer']
     },
     forRole: { 
       type: mongoose.Schema.Types.ObjectId,  
