@@ -1,7 +1,6 @@
 import User from "../model/user.schema.js";
 import Event from "../model/event.schema.js";
 import Category from "../model/categories.schema.js";
-// import Notification from "../model/notification.schema.js";
 
 export const verifyOrganizer = async (req, res, next) => {
   try {
@@ -98,16 +97,6 @@ export const verifyOrganizer = async (req, res, next) => {
           { path: "org_ID", select: "fullname email" },
           { path: "category", select: "categoryName" },
         ]);
-
-        // Create notification for admin
-        // await Notification.create({
-        //     recipient: 'admin',
-        //     type: 'event_request',
-        //     message: `New event "${savedEvent.event_name}" created by ${user.fullname}, awaiting approval.`,
-        //     eventId: savedEvent._id,
-        //     organizerId: req.user.id,
-        //     status: 'unread'
-        // });
 
         console.log(
           `Pending event created: ${savedEvent.event_name} (requires approval)`

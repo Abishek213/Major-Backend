@@ -315,7 +315,7 @@ const seedPlanningAgentEvents = async () => {
           org_ID: organizer._id,
           tags: tmpl.tags,
           isPublic: true,
-          status: "approved",
+          status: "upcoming",
           attendees: Array(attendees).fill(organizer._id),
         });
 

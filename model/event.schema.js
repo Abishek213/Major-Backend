@@ -17,7 +17,10 @@ const eventSchema = new mongoose.Schema(
       required: true,
       validate: {
         validator: function (date) {
-          return date > new Date();
+          if (this.isNew) {
+            return date > new Date();
+          }
+          return true;
         },
         message: "Event date must be in the future",
       },
@@ -39,7 +42,6 @@ const eventSchema = new mongoose.Schema(
       required: true,
       min: [0, "Price cannot be negative"],
     },
-    // Changed from enum to ObjectId reference
     category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Category",
@@ -81,7 +83,6 @@ const eventSchema = new mongoose.Schema(
         "completed",
         "cancelled",
         "pending",
-        "approved",
         "rejected",
       ],
       default: "pending",
