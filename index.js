@@ -42,6 +42,7 @@ wsManager.initialize(server);
 const allowedOrigins = [
   "https://eventa-puce.vercel.app",
   "http://localhost:5173",
+  "https://e-venta-qv4a.vercel.app",
   "http://52.70.70.109:3000",
 ];
 
@@ -136,8 +137,14 @@ app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/eventrequest", eventRequestRoutes);
+
+// Add this debug middleware to see all registered routes
+app.use((req, res, next) => {
+  console.log(`🔍 Incoming request: ${req.method} ${req.url}`);
+  next();
+});
 app.use("/api/v1/ai", aiRoutes);
-app.use("/api/negotiation", negotiationRoutes);
+app.use("/api/v1/negotiation", negotiationRoutes);
 
 // Global Error Handler
 app.use((err, req, res, next) => {
