@@ -44,7 +44,6 @@ export const getAgents = async (req, res) => {
   try {
     const { type, status } = req.query;
     const filter = {};
-
     if (type) filter.agent_type = type;
     if (status) filter.status = status;
 
@@ -109,22 +108,17 @@ export const getUserRecommendations = async (req, res) => {
           source = "ai_agent";
           message = "AI-generated recommendations";
 
-          // Store in database
           await AIService.storeRecommendations(
             userId,
             recommendations,
             agent._id
           );
 
-          // Log action
           await AI_ActionLog.create({
             agentId: agent._id,
             userId: userId,
             logType: "recommendation",
-            actionDetails: {
-              count: recommendations.length,
-              source: "ai_agent",
-            },
+            actionDetails: { count: recommendations.length, source: "ai_agent" },
           });
         }
       } catch (aiError) {
@@ -153,10 +147,7 @@ export const getUserRecommendations = async (req, res) => {
     });
   } catch (error) {
     console.error("Recommendation error:", error);
-
-    // Emergency fallback
     const fallback = await AIService.getFallbackRecommendations(userId, 10);
-
     res.status(200).json({
       success: true,
       count: fallback.length,
@@ -220,7 +211,8 @@ export const chatBookingSupport = async (req, res) => {
       agent = "assistant",
       agentType,
     } = req.body;
-    const resolvedAgent = agent !== "assistant" ? agent : (agentType ?? "assistant");
+    const resolvedAgent =
+      agent !== "assistant" ? agent : (agentType ?? "assistant");
     const userId = req.user?.id || req.body.userId;
     const sessionId = req.body.sessionId;
 
@@ -237,7 +229,7 @@ export const chatBookingSupport = async (req, res) => {
 
     console.log(
       `💬 Booking support chat from ${userId || sessionId || "anonymous"} ` +
-      `[lang=${language}, agent=${resolvedAgent}]`
+        `[lang=${language}, agent=${resolvedAgent}]`
     );
 
     const response = await AIService.chatBookingSupport({
@@ -251,7 +243,6 @@ export const chatBookingSupport = async (req, res) => {
     res.json(response);
   } catch (error) {
     console.error("Booking support chat error:", error);
-
     res.status(500).json({
       success: false,
       message:
@@ -268,10 +259,9 @@ export const clearBookingSupportHistory = async (req, res) => {
     const sessionId = req.body.sessionId;
 
     if (!userId && !sessionId) {
-      return res.status(400).json({
-        success: false,
-        message: "userId or sessionId is required",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "userId or sessionId is required" });
     }
 
     console.log(`🗑️ Clearing history for ${userId || sessionId}`);
@@ -297,10 +287,9 @@ export const clearBookingSupportHistoryAnonymous = async (req, res) => {
     const { sessionId } = req.body;
 
     if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        message: "sessionId is required",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "sessionId is required" });
     }
 
     console.log(`🗑️ Clearing anonymous history for session: ${sessionId}`);
@@ -356,22 +345,9 @@ export const getBookingSupportStats = async (req, res) => {
 };
 
 // ============================================================================
-// EVENT REQUEST AI PROCESSING (NEW)
-// These endpoints are called internally by eventrequest.controller.js
-// via AI_AGENT_URL — they use the existing AIService / booking-support
-// infrastructure to extract entities and match organizers from natural language.
+// EVENT REQUEST AI PROCESSING
 // ============================================================================
 
-/**
- * POST /api/ai/process-event-request
- *
- * Called by eventrequest.controller → callAIAgent()
- * Accepts a natural language event description and returns:
- *  - extractedEntities  (eventType, locations, date, budget, attendees)
- *  - matchedOrganizers  (array of suggested organizers)
- *  - budgetAnalysis     (feasibility note)
- *  - aiSuggestions      (tips)
- */
 export const processEventRequest = async (req, res) => {
   try {
     const { naturalLanguage, userId } = req.body;
@@ -383,14 +359,15 @@ export const processEventRequest = async (req, res) => {
       });
     }
 
-    console.log(`🎯 Processing event request from user: ${userId || "anonymous"}`);
-    console.log(`📝 Natural language: ${naturalLanguage.substring(0, 100)}...`);
+    console.log(
+      `🎯 Processing event request from user: ${userId || "anonymous"}`
+    );
+    console.log(
+      `📝 Natural language: ${naturalLanguage.substring(0, 100)}...`
+    );
 
-    // ── Step 1: Extract entities from the natural language description ─────
-    // Use the booking-support chat agent to extract structured info
     let extractedEntities = extractEntitiesLocally(naturalLanguage);
 
-    // Try to get richer extraction via AIService if available
     try {
       const chatResponse = await AIService.chatBookingSupport({
         message: `Extract event details from: "${naturalLanguage}". 
@@ -400,7 +377,6 @@ export const processEventRequest = async (req, res) => {
         sessionId: `extract_${Date.now()}`,
       });
 
-      // Try to parse JSON from AI response
       const aiText =
         chatResponse?.data?.response ||
         chatResponse?.response ||
@@ -410,7 +386,6 @@ export const processEventRequest = async (req, res) => {
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
-        // Merge AI-extracted with local fallback
         extractedEntities = {
           eventType: parsed.eventType || extractedEntities.eventType,
           locations: parsed.locations?.length
@@ -422,20 +397,19 @@ export const processEventRequest = async (req, res) => {
         };
       }
     } catch (aiErr) {
-      // AI extraction failed — local extraction is already set, continue
-      console.warn("AI entity extraction failed, using local fallback:", aiErr.message);
+      console.warn(
+        "AI entity extraction failed, using local fallback:",
+        aiErr.message
+      );
     }
 
-    // ── Step 2: Find matching organizers from the database ─────────────────
     const matchedOrganizers = await findMatchingOrganizers(extractedEntities);
-
-    // ── Step 3: Build budget analysis ─────────────────────────────────────
-    const budgetAnalysis = analyzeBudget(extractedEntities.budget, extractedEntities.attendees);
-
-    // ── Step 4: Build AI suggestions ──────────────────────────────────────
+    const budgetAnalysis = analyzeBudget(
+      extractedEntities.budget,
+      extractedEntities.attendees
+    );
     const aiSuggestions = buildSuggestions(extractedEntities);
 
-    // ── Step 5: Log the action ────────────────────────────────────────────
     try {
       let agent = await AI_Agent.findOne({ name: "event-request-agent" });
       if (!agent) {
@@ -444,7 +418,10 @@ export const processEventRequest = async (req, res) => {
           role: "assistant",
           agent_type: "user",
           status: "active",
-          capabilities: { event_request_processing: true, entity_extraction: true },
+          capabilities: {
+            event_request_processing: true,
+            entity_extraction: true,
+          },
         });
       }
 
@@ -462,7 +439,6 @@ export const processEventRequest = async (req, res) => {
       console.warn("Action log failed (non-critical):", logErr.message);
     }
 
-    // ── Response ──────────────────────────────────────────────────────────
     res.status(200).json({
       success: true,
       extractedEntities,
@@ -481,17 +457,13 @@ export const processEventRequest = async (req, res) => {
   }
 };
 
-/**
- * GET /api/ai/event-suggestions
- *
- * Called by eventrequest.controller → fetchAISuggestedOrganizers()
- * Query params: eventType, budget, location, date
- */
 export const getEventSuggestions = async (req, res) => {
   try {
     const { eventType, budget, location, date } = req.query;
 
-    console.log(`🔍 Fetching organizer suggestions for: ${eventType} in ${location}`);
+    console.log(
+      `🔍 Fetching organizer suggestions for: ${eventType} in ${location}`
+    );
 
     const extractedEntities = {
       eventType: eventType || "General",
@@ -518,15 +490,11 @@ export const getEventSuggestions = async (req, res) => {
   }
 };
 
-// ── Private helpers for event request processing ──────────────────────────────
+// ── Private helpers ───────────────────────────────────────────────────────────
 
-/**
- * Local keyword-based entity extraction (runs even when AI is unavailable)
- */
 function extractEntitiesLocally(text) {
   const lower = text.toLowerCase();
 
-  // Event type
   const eventTypeMap = {
     conference: ["conference", "summit", "convention"],
     workshop: ["workshop", "training", "seminar", "class"],
@@ -537,7 +505,14 @@ function extractEntitiesLocally(text) {
     corporate: ["corporate", "business", "company", "office"],
     music: ["music", "band", "dj"],
     sports: ["sports", "game", "match", "tournament"],
-    technology: ["tech", "technology", "it", "software", "developer", "coding"],
+    technology: [
+      "tech",
+      "technology",
+      "it",
+      "software",
+      "developer",
+      "coding",
+    ],
   };
 
   let eventType = "General";
@@ -548,32 +523,43 @@ function extractEntitiesLocally(text) {
     }
   }
 
-  // Location
   const locationKeywords = [
-    "kathmandu", "pokhara", "lalitpur", "bhaktapur", "biratnagar",
-    "birgunj", "dharan", "butwal", "chitwan", "online", "virtual",
+    "kathmandu",
+    "pokhara",
+    "lalitpur",
+    "bhaktapur",
+    "biratnagar",
+    "birgunj",
+    "dharan",
+    "butwal",
+    "chitwan",
+    "online",
+    "virtual",
   ];
   const locations = locationKeywords.filter((loc) => lower.includes(loc));
-  if (locations.length === 0 && lower.includes("nepal")) locations.push("Nepal");
+  if (locations.length === 0 && lower.includes("nepal"))
+    locations.push("Nepal");
 
-  // Date
   let date = "";
   if (lower.includes("next month")) date = "Next Month";
   else if (lower.includes("next week")) date = "Next Week";
-  else if (lower.includes("this weekend") || lower.includes("weekend")) date = "This Weekend";
+  else if (lower.includes("this weekend") || lower.includes("weekend"))
+    date = "This Weekend";
   else if (lower.includes("tomorrow")) date = "Tomorrow";
   else if (lower.includes("today")) date = "Today";
 
-  // Budget
   let budget = "";
-  const budgetMatch = lower.match(/\$[\d,]+|rs\.?\s*[\d,]+|npr\.?\s*[\d,]+|[\d,]+\s*(?:budget|npr|rs)/i);
+  const budgetMatch = lower.match(
+    /\$[\d,]+|rs\.?\s*[\d,]+|npr\.?\s*[\d,]+|[\d,]+\s*(?:budget|npr|rs)/i
+  );
   if (budgetMatch) budget = budgetMatch[0];
   else if (lower.includes("free")) budget = "Free";
   else if (lower.includes("low budget")) budget = "Low Budget";
 
-  // Attendees
   let attendees = "";
-  const attendeeMatch = lower.match(/(\d+)\s*(?:people|persons|attendees|guests|participants)/i);
+  const attendeeMatch = lower.match(
+    /(\d+)\s*(?:people|persons|attendees|guests|participants)/i
+  );
   if (attendeeMatch) attendees = attendeeMatch[1];
   else if (lower.includes("small")) attendees = "< 50";
   else if (lower.includes("large")) attendees = "> 200";
@@ -581,13 +567,8 @@ function extractEntitiesLocally(text) {
   return { eventType, locations, date, budget, attendees };
 }
 
-/**
- * Find matching organizers from the DB based on extracted entities.
- * Falls back to a scored list if no DB matches found.
- */
 async function findMatchingOrganizers(entities) {
   try {
-    // Try to find real organizer users from DB
     const Role = (await import("../model/role.schema.js")).default;
     const User = (await import("../model/user.schema.js")).default;
 
@@ -601,7 +582,6 @@ async function findMatchingOrganizers(entities) {
 
     if (!organizers.length) return buildFallbackOrganizers(entities);
 
-    // Score each organizer (simple scoring — extend as needed)
     return organizers.map((org, idx) => ({
       id: org._id,
       name: org.fullname,
@@ -609,7 +589,8 @@ async function findMatchingOrganizers(entities) {
       matchScore: Math.max(95 - idx * 7, 60),
       specialization: entities.eventType || "General Events",
       rating: (4.5 - idx * 0.1).toFixed(1),
-      responseTime: idx === 0 ? "< 1 hour" : idx === 1 ? "< 3 hours" : "< 24 hours",
+      responseTime:
+        idx === 0 ? "< 1 hour" : idx === 1 ? "< 3 hours" : "< 24 hours",
       completedEvents: Math.max(50 - idx * 5, 10),
       successRate: `${Math.max(98 - idx * 2, 85)}%`,
     }));
@@ -619,9 +600,6 @@ async function findMatchingOrganizers(entities) {
   }
 }
 
-/**
- * Static fallback organizers when DB lookup fails
- */
 function buildFallbackOrganizers(entities) {
   const type = entities.eventType || "General";
   return [
@@ -658,51 +636,55 @@ function buildFallbackOrganizers(entities) {
   ];
 }
 
-/**
- * Analyze budget feasibility
- */
 function analyzeBudget(budget, attendees) {
-  if (!budget) {
-    return { feasibility: "unknown", note: "No budget specified" };
-  }
+  if (!budget) return { feasibility: "unknown", note: "No budget specified" };
 
   const lower = budget.toLowerCase();
-  if (lower === "free") {
+  if (lower === "free")
     return { feasibility: "high", note: "Free events are easy to organize" };
-  }
 
   const numMatch = budget.match(/[\d,]+/);
   if (numMatch) {
     const amount = parseInt(numMatch[0].replace(/,/g, ""));
-    if (amount < 10000) return { feasibility: "low", note: "Budget may be tight for a quality event" };
-    if (amount < 50000) return { feasibility: "moderate", note: "Budget is workable for a mid-size event" };
-    return { feasibility: "high", note: "Budget looks comfortable for this event size" };
-  }
-
-  return { feasibility: "moderate", note: "Budget noted — organizer will confirm feasibility" };
-}
-
-/**
- * Build actionable suggestions based on extracted entities
- */
-function buildSuggestions(entities) {
-  const tips = [];
-
-  if (!entities.date) {
-    tips.push("Consider specifying a date — organizers can confirm availability faster");
-  }
-  if (!entities.budget) {
-    tips.push("Sharing a budget range helps organizers give accurate proposals");
-  }
-  if (!entities.attendees) {
-    tips.push("Mentioning expected attendance helps plan venue and catering");
-  }
-  if (entities.locations.length === 0) {
-    tips.push("Specifying a location helps match local organizers");
+    if (amount < 10000)
+      return {
+        feasibility: "low",
+        note: "Budget may be tight for a quality event",
+      };
+    if (amount < 50000)
+      return {
+        feasibility: "moderate",
+        note: "Budget is workable for a mid-size event",
+      };
+    return {
+      feasibility: "high",
+      note: "Budget looks comfortable for this event size",
+    };
   }
 
   return {
-    tip: tips[0] || "Book at least 4 weeks in advance for best organizer availability",
+    feasibility: "moderate",
+    note: "Budget noted — organizer will confirm feasibility",
+  };
+}
+
+function buildSuggestions(entities) {
+  const tips = [];
+  if (!entities.date)
+    tips.push(
+      "Consider specifying a date — organizers can confirm availability faster"
+    );
+  if (!entities.budget)
+    tips.push("Sharing a budget range helps organizers give accurate proposals");
+  if (!entities.attendees)
+    tips.push("Mentioning expected attendance helps plan venue and catering");
+  if (entities.locations.length === 0)
+    tips.push("Specifying a location helps match local organizers");
+
+  return {
+    tip:
+      tips[0] ||
+      "Book at least 4 weeks in advance for best organizer availability",
     allTips: tips,
   };
 }
@@ -716,35 +698,80 @@ export const planEvent = async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const { eventType, budget, attendees, location, eventDate } = req.body;
-    const organizerId = req.user?.id;
+    const {
+      eventType,
+      category,
+      budget,
+      attendees,
+      location,
+      eventDate,
+      description,
+      // Accept both camelCase and snake_case from the frontend
+      event_type,
+      event_date,
+      event_name,
+      eventName,
+      totalSlots,
+      total_slots,
+      time,
+    } = req.body;
 
-    if (!eventType || !budget || !attendees || !location || !eventDate) {
+    // ── Resolve eventType ────────────────────────────────────────────────────
+    const isObjectId = (val) =>
+      typeof val === "string" && /^[a-f\d]{24}$/i.test(val);
+
+    const resolvedEventType =
+      eventType ||
+      event_type ||
+      (isObjectId(category) ? "general" : category) ||
+      "general";
+
+    const resolvedLocation   = location   || "TBD";
+    const resolvedEventDate  = eventDate  || event_date;
+    const resolvedEventName  = eventName  || event_name || "Untitled Event";
+    const resolvedTotalSlots = parseInt(totalSlots || total_slots) || 100;
+    const organizerId        = req.user?.id;
+
+    // ── Validation ──────────────────────────────────────────────────────────
+    if (!resolvedEventType || !resolvedLocation || !resolvedEventDate) {
       return res.status(400).json({
         success: false,
         message:
-          "Missing required fields: eventType, budget, attendees, location, eventDate",
+          "Missing required fields: eventType (or category), location, eventDate",
       });
     }
 
     const validEventTypes = [
-      "conference", "workshop", "wedding", "birthday", "concert", "festival",
+      "conference",
+      "workshop",
+      "wedding",
+      "birthday",
+      "concert",
+      "festival",
+      "general",
     ];
-    if (!validEventTypes.includes(eventType.toLowerCase())) {
+
+    if (!validEventTypes.includes(resolvedEventType.toLowerCase())) {
       return res.status(400).json({
         success: false,
         message: `Invalid event type. Must be one of: ${validEventTypes.join(", ")}`,
       });
     }
 
-    if (budget <= 0 || attendees <= 0) {
+    if (budget && Number(budget) <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Budget must be a positive number" });
+    }
+
+    if (attendees && Number(attendees) <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Budget and attendees must be positive numbers",
+        message: "Attendees must be a positive number",
       });
     }
 
-    const eventDateObj = new Date(eventDate);
+    const eventDateObj = new Date(resolvedEventDate);
     if (isNaN(eventDateObj.getTime()) || eventDateObj < new Date()) {
       return res.status(400).json({
         success: false,
@@ -753,9 +780,12 @@ export const planEvent = async (req, res) => {
     }
 
     console.log(
-      `📋 Planning ${eventType} event for organizer: ${organizerId || "anonymous"}`
+      `📋 Planning ${resolvedEventType} event for organizer: ${
+        organizerId || "anonymous"
+      }`
     );
 
+    // ── Ensure planning agent exists in DB ──────────────────────────────────
     let planningAgent = await AI_Agent.findOne({
       name: "planning-agent",
       agent_type: "organizer",
@@ -778,24 +808,42 @@ export const planEvent = async (req, res) => {
       console.log("✅ Planning agent registered in database");
     }
 
+    // ── Call AI service ─────────────────────────────────────────────────────
+    // Pass ALL field name variants so the AI agent handles either convention.
     const planningResult = await AIService.planEvent({
-      eventType: eventType.toLowerCase(),
-      budget: parseFloat(budget),
-      attendees: parseInt(attendees),
-      location,
-      eventDate,
+      // camelCase
+      eventName:   resolvedEventName,
+      eventType:   resolvedEventType.toLowerCase(),
+      eventDate:   resolvedEventDate,
+      totalSlots:  resolvedTotalSlots,
+      // snake_case
+      event_name:  resolvedEventName,
+      event_type:  resolvedEventType.toLowerCase(),
+      event_date:  resolvedEventDate,
+      total_slots: resolvedTotalSlots,
+      // shared
+      location:    resolvedLocation,
+      category:    resolvedEventType.toLowerCase(),
+      budget:      parseFloat(budget) || 0,
+      attendees:   parseInt(attendees) || 50,
+      description: description || "",
+      time:        time || "10:00",
       organizerId,
     });
 
     const processingTime = Date.now() - startTime;
 
+    // ── Log failure ─────────────────────────────────────────────────────────
     if (!planningResult.success) {
       await AI_ActionLog.create({
         agentId: planningAgent._id,
         userId: organizerId || null,
         logType: "event_planning",
         actionDetails: {
-          eventType, budget, attendees, location,
+          eventType: resolvedEventType,
+          budget,
+          attendees,
+          location: resolvedLocation,
           error: planningResult.error || planningResult.message,
         },
         success: false,
@@ -810,29 +858,38 @@ export const planEvent = async (req, res) => {
       });
     }
 
+    // ── Log success ─────────────────────────────────────────────────────────
     await AI_ActionLog.create({
       agentId: planningAgent._id,
       userId: organizerId || null,
       logType: "event_planning",
       actionDetails: {
-        eventType, budget, attendees, location,
-        plan_generated: true,
-        llm_enhanced: planningResult.plan?.metadata?.llm_enhanced || false,
+        eventType:       resolvedEventType,
+        budget,
+        attendees,
+        location:        resolvedLocation,
+        plan_generated:  true,
+        llm_enhanced:    planningResult.metadata?.llm_enhanced || false,
         processing_time: processingTime,
       },
       success: true,
     });
 
+    // ── Respond ─────────────────────────────────────────────────────────────
+    // Shape the frontend reads:
+    //   response.data.data.fullSuggestions.suggestions
     res.status(200).json({
       success: true,
       message: "Event plan generated successfully",
       data: {
-        plan: planningResult.plan,
+        fullSuggestions: {
+          suggestions: planningResult.suggestions,
+        },
         processing_time: processingTime,
         agent_info: {
-          agent_id: planningAgent._id,
-          agent_name: planningAgent.name,
-          llm_enhanced: planningResult.plan?.metadata?.llm_enhanced || false,
+          agent_id:    planningAgent._id,
+          agent_name:  planningAgent.name,
+          llm_enhanced: planningResult.metadata?.llm_enhanced || false,
         },
       },
       timestamp: new Date().toISOString(),
@@ -860,7 +917,10 @@ export const planEvent = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to generate event plan",
-      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Internal server error",
       timestamp: new Date().toISOString(),
     });
   }
@@ -892,14 +952,17 @@ export const getPlanningAgentStats = async (req, res) => {
     const organizerId = req.user?.id;
     const { timeRange = "30d" } = req.query;
 
-    const daysBack = timeRange === "7d" ? 7 : timeRange === "90d" ? 90 : 30;
+    const daysBack =
+      timeRange === "7d" ? 7 : timeRange === "90d" ? 90 : 30;
     const dateFrom = new Date();
     dateFrom.setDate(dateFrom.getDate() - daysBack);
 
     const agent = await AI_Agent.findOne({ name: "planning-agent" });
 
     if (!agent) {
-      return res.status(404).json({ success: false, message: "Planning agent not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Planning agent not found" });
     }
 
     const filter = {
@@ -907,7 +970,6 @@ export const getPlanningAgentStats = async (req, res) => {
       logType: "event_planning",
       createdAt: { $gte: dateFrom },
     };
-
     if (organizerId) filter.userId = organizerId;
 
     const [totalPlans, successfulPlans, failedPlans, recentLogs] =
@@ -921,11 +983,15 @@ export const getPlanningAgentStats = async (req, res) => {
           .select("actionDetails success createdAt"),
       ]);
 
-    const logsWithTime = recentLogs.filter((log) => log.actionDetails?.processing_time);
+    const logsWithTime = recentLogs.filter(
+      (log) => log.actionDetails?.processing_time
+    );
     const avgProcessingTime =
       logsWithTime.length > 0
-        ? logsWithTime.reduce((sum, log) => sum + log.actionDetails.processing_time, 0) /
-          logsWithTime.length
+        ? logsWithTime.reduce(
+            (sum, log) => sum + log.actionDetails.processing_time,
+            0
+          ) / logsWithTime.length
         : 0;
 
     const eventTypeStats = await AI_ActionLog.aggregate([
@@ -941,10 +1007,16 @@ export const getPlanningAgentStats = async (req, res) => {
           total_plans: totalPlans,
           successful: successfulPlans,
           failed: failedPlans,
-          success_rate: totalPlans > 0 ? ((successfulPlans / totalPlans) * 100).toFixed(1) : 0,
+          success_rate:
+            totalPlans > 0
+              ? ((successfulPlans / totalPlans) * 100).toFixed(1)
+              : 0,
           avg_processing_time_ms: Math.round(avgProcessingTime),
         },
-        event_types: eventTypeStats.map((stat) => ({ type: stat._id, count: stat.count })),
+        event_types: eventTypeStats.map((stat) => ({
+          type: stat._id,
+          count: stat.count,
+        })),
         recent_activity: recentLogs.map((log) => ({
           event_type: log.actionDetails?.eventType,
           budget: log.actionDetails?.budget,
@@ -990,13 +1062,16 @@ export const createNegotiation = async (req, res) => {
 export const updateNegotiation = async (req, res) => {
   try {
     const { id } = req.params;
-    const negotiation = await AI_NegotiationLog.findByIdAndUpdate(id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const negotiation = await AI_NegotiationLog.findByIdAndUpdate(
+      id,
+      req.body,
+      { new: true, runValidators: true }
+    );
 
     if (!negotiation) {
-      return res.status(404).json({ success: false, message: "Negotiation not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Negotiation not found" });
     }
 
     res.json({ success: true, data: negotiation });
@@ -1016,7 +1091,9 @@ export const performFraudCheck = async (req, res) => {
     const booking = await Booking.findById(bookingId);
 
     if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Booking not found" });
     }
 
     const fraudAgent = await AI_Agent.findOne({
@@ -1039,7 +1116,11 @@ export const performFraudCheck = async (req, res) => {
       bookingId: bookingId,
       riskScore: riskScore,
       fraudStatus:
-        riskScore > 0.9 ? "fraudulent" : riskScore > 0.7 ? "suspicious" : "clean",
+        riskScore > 0.9
+          ? "fraudulent"
+          : riskScore > 0.7
+          ? "suspicious"
+          : "clean",
       checkVersion: "1.0",
     });
 
@@ -1065,7 +1146,9 @@ export const analyzeReviewSentiment = async (req, res) => {
       .populate("eventId", "event_name");
 
     if (!review) {
-      return res.status(404).json({ success: false, message: "Review not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Review not found" });
     }
 
     const sentimentAgent = await AI_Agent.findOne({
@@ -1104,7 +1187,7 @@ export const analyzeReviewSentiment = async (req, res) => {
   }
 };
 
-// ==================== AI DASHBOARD ====================
+// ==================== AI DASHBOARD (Admin) ====================
 export const getAIDashboard = async (req, res) => {
   try {
     const [
@@ -1144,6 +1227,469 @@ export const getAIDashboard = async (req, res) => {
       },
     });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ======================================================
+// =========== Organizer Dashboard Functions ============
+// ======================================================
+
+// Helper: parse dateRange query param (e.g. "month:1", "month:3", "week:1")
+function parseDateRange(dateRange = "month:1") {
+  const [unit, amount] = dateRange.split(":");
+  const num = parseInt(amount) || 1;
+  const dateFrom = new Date();
+  if (unit === "week") dateFrom.setDate(dateFrom.getDate() - num * 7);
+  else if (unit === "year") dateFrom.setFullYear(dateFrom.getFullYear() - num);
+  else dateFrom.setMonth(dateFrom.getMonth() - num);
+  return dateFrom;
+}
+
+// GET /api/v1/ai/dashboard/metrics/:id
+export const getOrganizerMetrics = async (req, res) => {
+  try {
+    const { id: organizerId } = req.params;
+    const { dateRange = "month:1" } = req.query;
+    const dateFrom = parseDateRange(dateRange);
+
+    const events = await Event.find({ organizer: organizerId }).select(
+      "_id totalSlots"
+    );
+    const eventIds = events.map((e) => e._id);
+
+    if (!eventIds.length) {
+      return res.json({
+        success: true,
+        data: {
+          revenue: { total: 0 },
+          bookings: { total: 0, conversionRate: 0 },
+          events: { total: 0 },
+          ratings: { total: 0, average: 0 },
+        },
+      });
+    }
+
+    const [bookings, reviews, totalEvents] = await Promise.all([
+      Booking.find({
+        event: { $in: eventIds },
+        createdAt: { $gte: dateFrom },
+        status: { $in: ["confirmed", "completed"] },
+      }).select("totalPrice event createdAt"),
+      Review.find({ eventId: { $in: eventIds } }).select("rating"),
+      Event.countDocuments({ organizer: organizerId }),
+    ]);
+
+    const totalRevenue = bookings.reduce(
+      (sum, b) => sum + (b.totalPrice || 0),
+      0
+    );
+    const totalBookings = bookings.length;
+    const totalSlots = events.reduce((sum, e) => sum + (e.totalSlots || 0), 0);
+    const conversionRate = totalSlots > 0 ? totalBookings / totalSlots : 0;
+    const avgRating =
+      reviews.length > 0
+        ? reviews.reduce((sum, r) => sum + (r.rating || 0), 0) / reviews.length
+        : 0;
+
+    res.json({
+      success: true,
+      data: {
+        revenue: { total: totalRevenue },
+        bookings: { total: totalBookings, conversionRate },
+        events: { total: totalEvents },
+        ratings: { total: reviews.length, average: avgRating },
+      },
+    });
+  } catch (error) {
+    console.error("getOrganizerMetrics error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/ai/dashboard/revenue/:id
+export const getOrganizerRevenue = async (req, res) => {
+  try {
+    const { id: organizerId } = req.params;
+    const { dateRange = "month:1" } = req.query;
+    const dateFrom = parseDateRange(dateRange);
+
+    const events = await Event.find({ organizer: organizerId }).select(
+      "_id event_name"
+    );
+    const eventIds = events.map((e) => e._id);
+
+    if (!eventIds.length) {
+      return res.json({
+        success: true,
+        data: { total: 0, byEvent: [], byMonth: [] },
+      });
+    }
+
+    const bookings = await Booking.find({
+      event: { $in: eventIds },
+      createdAt: { $gte: dateFrom },
+      status: { $in: ["confirmed", "completed"] },
+    }).select("totalPrice event createdAt");
+
+    const revenueMap = {};
+    bookings.forEach((b) => {
+      const key = String(b.event);
+      if (!revenueMap[key]) revenueMap[key] = { revenue: 0, bookings: 0 };
+      revenueMap[key].revenue += b.totalPrice || 0;
+      revenueMap[key].bookings += 1;
+    });
+
+    const byEvent = events
+      .filter((e) => revenueMap[String(e._id)])
+      .map((e) => ({
+        _id: e._id,
+        eventName: e.event_name,
+        revenue: revenueMap[String(e._id)]?.revenue || 0,
+        bookings: revenueMap[String(e._id)]?.bookings || 0,
+      }));
+
+    const monthMap = {};
+    bookings.forEach((b) => {
+      const key = `${b.createdAt.getFullYear()}-${b.createdAt.getMonth() + 1}`;
+      if (!monthMap[key])
+        monthMap[key] = {
+          year: b.createdAt.getFullYear(),
+          month: b.createdAt.getMonth() + 1,
+          revenue: 0,
+        };
+      monthMap[key].revenue += b.totalPrice || 0;
+    });
+
+    const byMonth = Object.values(monthMap).sort(
+      (a, b) => a.year - b.year || a.month - b.month
+    );
+    const total = bookings.reduce((sum, b) => sum + (b.totalPrice || 0), 0);
+
+    res.json({ success: true, data: { total, byEvent, byMonth } });
+  } catch (error) {
+    console.error("getOrganizerRevenue error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/ai/dashboard/bookings/:id
+export const getOrganizerBookings = async (req, res) => {
+  try {
+    const { id: organizerId } = req.params;
+    const { dateRange = "month:1" } = req.query;
+    const dateFrom = parseDateRange(dateRange);
+
+    const events = await Event.find({ organizer: organizerId }).select(
+      "_id event_name totalSlots"
+    );
+    const eventIds = events.map((e) => e._id);
+
+    if (!eventIds.length) {
+      return res.json({
+        success: true,
+        data: {
+          total: 0,
+          confirmed: 0,
+          cancelled: 0,
+          pending: 0,
+          conversionRate: 0,
+        },
+      });
+    }
+
+    const [confirmed, cancelled, pending] = await Promise.all([
+      Booking.countDocuments({
+        event: { $in: eventIds },
+        createdAt: { $gte: dateFrom },
+        status: { $in: ["confirmed", "completed"] },
+      }),
+      Booking.countDocuments({
+        event: { $in: eventIds },
+        createdAt: { $gte: dateFrom },
+        status: "cancelled",
+      }),
+      Booking.countDocuments({
+        event: { $in: eventIds },
+        createdAt: { $gte: dateFrom },
+        status: "pending",
+      }),
+    ]);
+
+    const total = confirmed + cancelled + pending;
+    const totalSlots = events.reduce((sum, e) => sum + (e.totalSlots || 0), 0);
+    const conversionRate = totalSlots > 0 ? confirmed / totalSlots : 0;
+
+    res.json({
+      success: true,
+      data: { total, confirmed, cancelled, pending, conversionRate },
+    });
+  } catch (error) {
+    console.error("getOrganizerBookings error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/ai/dashboard/trends/:id
+export const getOrganizerTrends = async (req, res) => {
+  try {
+    const { id: organizerId } = req.params;
+    const { dateRange = "month:1" } = req.query;
+    const dateFrom = parseDateRange(dateRange);
+
+    const events = await Event.find({ organizer: organizerId }).select("_id");
+    const eventIds = events.map((e) => e._id);
+
+    if (!eventIds.length) {
+      return res.json({
+        success: true,
+        data: { bookingTrends: [], revenueTrends: [] },
+      });
+    }
+
+    const bookings = await Booking.find({
+      event: { $in: eventIds },
+      createdAt: { $gte: dateFrom },
+    }).select("totalPrice status createdAt");
+
+    const dayMap = {};
+    bookings.forEach((b) => {
+      const key = b.createdAt.toISOString().split("T")[0];
+      if (!dayMap[key]) dayMap[key] = { date: key, bookings: 0, revenue: 0 };
+      dayMap[key].bookings += 1;
+      if (["confirmed", "completed"].includes(b.status)) {
+        dayMap[key].revenue += b.totalPrice || 0;
+      }
+    });
+
+    const trends = Object.values(dayMap).sort((a, b) =>
+      a.date.localeCompare(b.date)
+    );
+
+    res.json({
+      success: true,
+      data: {
+        bookingTrends: trends.map((t) => ({ date: t.date, count: t.bookings })),
+        revenueTrends: trends.map((t) => ({
+          date: t.date,
+          revenue: t.revenue,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("getOrganizerTrends error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/ai/dashboard/sentiment/:id
+export const getOrganizerSentiment = async (req, res) => {
+  try {
+    const { id: organizerId } = req.params;
+
+    const events = await Event.find({ organizer: organizerId }).select("_id");
+    const eventIds = events.map((e) => e._id);
+
+    if (!eventIds.length) {
+      return res.json({
+        success: true,
+        data: {
+          averageScore: 0,
+          totalAnalyzed: 0,
+          distribution: { positive: 0, neutral: 0, negative: 0 },
+          commonIssues: [],
+          overTime: [],
+        },
+      });
+    }
+
+    const reviews = await Review.find({
+      eventId: { $in: eventIds },
+    }).select("comment rating createdAt");
+
+    let positive = 0,
+      neutral = 0,
+      negative = 0;
+    let totalScore = 0;
+    const issueCount = {};
+
+    reviews.forEach((r) => {
+      const score = analyzeSentiment(r.comment);
+      totalScore += score;
+      if (score > 0.1) positive++;
+      else if (score < -0.1) negative++;
+      else neutral++;
+
+      const issues = detectIssues(r.comment);
+      issues.forEach((issue) => {
+        issueCount[issue] = (issueCount[issue] || 0) + 1;
+      });
+    });
+
+    const avgScore = reviews.length > 0 ? totalScore / reviews.length : 0;
+    const commonIssues = Object.entries(issueCount)
+      .map(([_id, count]) => ({ _id, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const monthMap = {};
+    reviews.forEach((r) => {
+      const score = analyzeSentiment(r.comment);
+      const key = `${r.createdAt.getFullYear()}-${r.createdAt.getMonth() + 1}`;
+      if (!monthMap[key])
+        monthMap[key] = {
+          _id: {
+            year: r.createdAt.getFullYear(),
+            month: r.createdAt.getMonth() + 1,
+          },
+          scores: [],
+        };
+      monthMap[key].scores.push(score);
+    });
+
+    const overTime = Object.values(monthMap).map((m) => ({
+      _id: m._id,
+      averageScore:
+        m.scores.reduce((a, b) => a + b, 0) / m.scores.length,
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        averageScore: avgScore,
+        totalAnalyzed: reviews.length,
+        distribution: { positive, neutral, negative },
+        commonIssues,
+        overTime,
+      },
+    });
+  } catch (error) {
+    console.error("getOrganizerSentiment error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/ai/dashboard/ratings/:id
+export const getOrganizerRatings = async (req, res) => {
+  try {
+    const { id: organizerId } = req.params;
+    const { dateRange = "month:1" } = req.query;
+    const dateFrom = parseDateRange(dateRange);
+
+    const events = await Event.find({ organizer: organizerId }).select(
+      "_id event_name"
+    );
+    const eventIds = events.map((e) => e._id);
+
+    if (!eventIds.length) {
+      return res.json({
+        success: true,
+        data: { average: 0, total: 0, byEvent: [], distribution: {} },
+      });
+    }
+
+    const reviews = await Review.find({
+      eventId: { $in: eventIds },
+      createdAt: { $gte: dateFrom },
+    }).select("rating eventId");
+
+    const total = reviews.length;
+    const average =
+      total > 0
+        ? reviews.reduce((sum, r) => sum + (r.rating || 0), 0) / total
+        : 0;
+
+    const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    reviews.forEach((r) => {
+      const star = Math.round(r.rating);
+      if (distribution[star] !== undefined) distribution[star]++;
+    });
+
+    const eventRatingMap = {};
+    reviews.forEach((r) => {
+      const key = String(r.eventId);
+      if (!eventRatingMap[key]) eventRatingMap[key] = { scores: [] };
+      eventRatingMap[key].scores.push(r.rating || 0);
+    });
+
+    const byEvent = events
+      .filter((e) => eventRatingMap[String(e._id)])
+      .map((e) => {
+        const scores = eventRatingMap[String(e._id)]?.scores || [];
+        return {
+          _id: e._id,
+          eventName: e.event_name,
+          averageRating:
+            scores.length > 0
+              ? scores.reduce((a, b) => a + b, 0) / scores.length
+              : 0,
+          totalReviews: scores.length,
+        };
+      });
+
+    res.json({
+      success: true,
+      data: { average, total, distribution, byEvent },
+    });
+  } catch (error) {
+    console.error("getOrganizerRatings error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/ai/dashboard/events/:id
+export const getOrganizerEvents = async (req, res) => {
+  try {
+    const { id: organizerId } = req.params;
+    const { dateRange = "month:1" } = req.query;
+    const dateFrom = parseDateRange(dateRange);
+
+    const events = await Event.find({
+      organizer: organizerId,
+      createdAt: { $gte: dateFrom },
+    }).select(
+      "_id event_name totalSlots event_date location category createdAt"
+    );
+
+    if (!events.length) {
+      return res.json({
+        success: true,
+        data: { total: 0, attendanceDetails: [] },
+      });
+    }
+
+    const eventIds = events.map((e) => e._id);
+
+    const bookings = await Booking.find({
+      event: { $in: eventIds },
+      status: { $in: ["confirmed", "completed"] },
+    }).select("event");
+
+    const attendeeMap = {};
+    bookings.forEach((b) => {
+      const key = String(b.event);
+      attendeeMap[key] = (attendeeMap[key] || 0) + 1;
+    });
+
+    const attendanceDetails = events.map((e) => {
+      const attendeeCount = attendeeMap[String(e._id)] || 0;
+      const totalSlots = e.totalSlots || 1;
+      return {
+        _id: e._id,
+        event_name: e.event_name,
+        event_date: e.event_date,
+        location: e.location,
+        totalSlots,
+        attendeeCount,
+        attendanceRate: attendeeCount / totalSlots,
+      };
+    });
+
+    res.json({
+      success: true,
+      data: { total: events.length, attendanceDetails },
+    });
+  } catch (error) {
+    console.error("getOrganizerEvents error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -1197,7 +1743,6 @@ function analyzeSentiment(comment) {
 
   let score = 0;
   const words = comment?.toLowerCase().split(" ") || [];
-
   positiveWords.forEach((word) => { if (words.includes(word)) score += 0.2; });
   negativeWords.forEach((word) => { if (words.includes(word)) score -= 0.2; });
 
@@ -1215,7 +1760,6 @@ function detectIssues(comment) {
   };
 
   const lowerComment = comment?.toLowerCase() || "";
-
   Object.keys(issueKeywords).forEach((issue) => {
     if (issueKeywords[issue].some((keyword) => lowerComment.includes(keyword))) {
       issues.push(issue);
@@ -1239,12 +1783,19 @@ export default {
   performFraudCheck,
   analyzeReviewSentiment,
   getAIDashboard,
+  getOrganizerMetrics,
+  getOrganizerRevenue,
+  getOrganizerBookings,
+  getOrganizerTrends,
+  getOrganizerSentiment,
+  getOrganizerRatings,
+  getOrganizerEvents,
   checkAIHealth,
   chatBookingSupport,
   clearBookingSupportHistory,
   clearBookingSupportHistoryAnonymous,
   checkBookingSupportHealth,
   getBookingSupportStats,
-  processEventRequest,   // NEW
-  getEventSuggestions,   // NEW
+  processEventRequest,
+  getEventSuggestions,
 };

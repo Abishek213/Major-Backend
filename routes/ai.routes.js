@@ -16,8 +16,18 @@ import {
   clearBookingSupportHistoryAnonymous,
   checkBookingSupportHealth,
   getBookingSupportStats,
-  processEventRequest,       // NEW
-  getEventSuggestions,       // NEW
+  processEventRequest,
+  getEventSuggestions,
+  planEvent,
+  checkPlanningAgentHealth,
+  getPlanningAgentStats,
+  getOrganizerMetrics,
+  getOrganizerRevenue,
+  getOrganizerBookings,
+  getOrganizerTrends,
+  getOrganizerSentiment,
+  getOrganizerRatings,
+  getOrganizerEvents,
 } from "../controller/ai.controller.js";
 import {
   createReview,
@@ -96,16 +106,11 @@ router.get(
 );
 
 // ============================================================================
-// EVENT REQUEST AI ROUTES (NEW)
+// EVENT REQUEST AI ROUTES
 // These are called internally by eventrequest.controller.js via AI_AGENT_URL
 // ============================================================================
 
-// Called by eventrequest.controller → callAIAgent()
-// POST /api/ai/process-event-request
 router.post("/process-event-request", processEventRequest);
-
-// Called by eventrequest.controller → fetchAISuggestedOrganizers()
-// GET /api/ai/event-suggestions
 router.get("/event-suggestions", getEventSuggestions);
 
 // ============================================================================
@@ -165,9 +170,65 @@ router.get(
 router.get("/bookings/:id/fraud-risk", authenticateUser, getBookingFraudRisk);
 
 // ============================================================================
-// AI DASHBOARD (Admin Only)
+// AI ORGANIZER DASHBOARD ROUTES
+// ============================================================================
+
+router.get(
+  "/dashboard/metrics/:id",
+  authenticateUser,
+  getOrganizerMetrics
+);
+router.get(
+  "/dashboard/revenue/:id",
+  authenticateUser,
+  getOrganizerRevenue
+);
+router.get(
+  "/dashboard/bookings/:id",
+  authenticateUser,
+  getOrganizerBookings
+);
+router.get(
+  "/dashboard/trends/:id",
+  authenticateUser,
+  getOrganizerTrends
+);
+router.get(
+  "/dashboard/sentiment/:id",
+  authenticateUser,
+  getOrganizerSentiment
+);
+router.get(
+  "/dashboard/ratings/:id",
+  authenticateUser,
+  getOrganizerRatings
+);
+router.get(
+  "/dashboard/events/:id",
+  authenticateUser,
+  getOrganizerEvents
+);
+
+// ============================================================================
+// AI DASHBOARD (Admin Only) — must come AFTER /dashboard/:sub-routes
 // ============================================================================
 
 router.get("/dashboard", authenticateUser, protectAdmin, getAIDashboard);
+
+// ============================================================================
+// AI ORGANIZER / PLANNER ROUTES
+// ============================================================================
+
+router.post("/organizer/plan-event", authenticateUser, planEvent);
+router.get(
+  "/organizer/planning/health",
+  authenticateUser,
+  checkPlanningAgentHealth
+);
+router.get(
+  "/organizer/planning/stats",
+  authenticateUser,
+  getPlanningAgentStats
+);
 
 export default router;
