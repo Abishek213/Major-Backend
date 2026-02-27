@@ -883,31 +883,29 @@ export const rejectEventRequest = async (req, res) => {
 
 // ========== USER SELECTS AN ORGANIZER ==========
 
-// ========== USER SELECTS AN ORGANIZER ==========
-// ========== USER SELECTS AN ORGANIZER (DEBUG VERSION) ==========
 export const selectOrganizer = async (req, res) => {
   const { eventId, organizerId } = req.body;
-  
+
   console.log('='.repeat(50));
   console.log('🔍 SELECT ORGANIZER CALLED');
   console.log('📦 Request body:', { eventId, organizerId });
   console.log('👤 User from auth:', req.user ? { id: req.user._id || req.user.id } : 'No user');
-  
+
   try {
     // Validate inputs
     if (!eventId || !organizerId) {
       console.log('❌ Missing eventId or organizerId');
       return res.status(400).json({ message: 'eventId and organizerId are required' });
     }
-    
+
     console.log('🔎 Looking for event with ID:', eventId);
     const eventRequest = await EventRequest.findById(eventId);
-    
+
     if (!eventRequest) {
       console.log('❌ Event not found in database');
       return res.status(404).json({ message: 'Event request not found' });
     }
-    
+
     console.log('📋 EVENT FOUND:', {
       id: eventRequest._id.toString(),
       userId: eventRequest.userId?.toString(),
@@ -915,32 +913,34 @@ export const selectOrganizer = async (req, res) => {
       eventType: eventRequest.eventType,
       interestedOrganizersCount: eventRequest.interestedOrganizers?.length || 0
     });
-    
+
     // Log all interested organizers for debugging
     console.log('👥 INTERESTED ORGANIZERS:');
     eventRequest.interestedOrganizers.forEach((org, index) => {
       const orgId = org.organizerId?._id?.toString() || org.organizerId?.toString();
       console.log(`  [${index}] ID: ${orgId}, Status: ${org.status}, Budget: ${org.proposedBudget}`);
     });
-    
+
     // Find the selected organizer
     const organizerObjectId = new mongoose.Types.ObjectId(organizerId);
     const organizerIdStr = organizerObjectId.toString();
-    
+
     console.log('🎯 Looking for organizer with ID:', organizerIdStr);
-    
+
+    // ✅ FIXED: removed the buggy console.log inside findIndex that referenced
+    //           organizerIndex before it was assigned (caused ReferenceError → 500)
     const organizerIndex = eventRequest.interestedOrganizers.findIndex((org) => {
       const orgId = org.organizerId?._id?.toString() || org.organizerId?.toString();
-      const matches = orgId === organizerIdStr;
-      if (matches) console.log('✅ Found match at index', organizerIndex);
-      return matches;
+      return orgId === organizerIdStr;
     });
-    
+
+    console.log('🎯 Organizer index found:', organizerIndex);
+
     if (organizerIndex === -1) {
       console.log('❌ Organizer not found in interestedOrganizers array');
       return res.status(404).json({ message: 'Organizer not found in interested organizers' });
     }
-    
+
     const selectedOrganizer = eventRequest.interestedOrganizers[organizerIndex];
     console.log('✅ Selected organizer found:', {
       index: organizerIndex,
@@ -948,18 +948,18 @@ export const selectOrganizer = async (req, res) => {
       proposedBudget: selectedOrganizer.proposedBudget,
       negotiationId: selectedOrganizer.negotiationId
     });
-    
+
     // CRITICAL: Update the event
     console.log('🔄 Updating event status from', eventRequest.status, 'to', 'deal_done');
     eventRequest.status = 'deal_done';
-    
+
     console.log('🔄 Updating organizer statuses:');
     eventRequest.interestedOrganizers.forEach((org, index) => {
       const oldStatus = org.status;
       org.status = index === organizerIndex ? 'accepted' : 'rejected';
       console.log(`  Organizer ${index}: ${oldStatus} → ${org.status}`);
     });
-    
+
     // Save with explicit error handling
     console.log('💾 Attempting to save to database...');
     try {
@@ -970,7 +970,7 @@ export const selectOrganizer = async (req, res) => {
       console.log('❌ Save error details:', saveError);
       throw saveError;
     }
-    
+
     // Verify the save worked by fetching again
     const verifyEvent = await EventRequest.findById(eventId);
     console.log('🔍 VERIFICATION AFTER SAVE:', {
@@ -981,7 +981,7 @@ export const selectOrganizer = async (req, res) => {
         status: o.status
       }))
     });
-    
+
     // Update negotiation log if exists
     if (selectedOrganizer.negotiationId) {
       try {
@@ -999,13 +999,13 @@ export const selectOrganizer = async (req, res) => {
         console.warn('⚠️ Could not update negotiation log:', negErr.message);
       }
     }
-    
+
     // Send notifications (non-critical, don't block response)
     try {
       console.log('🔔 Sending notifications...');
       const OrganizerRole = mongoose.model('Role');
       const organizerRole = await OrganizerRole.findOne({ role_Name: 'Organizer' });
-      
+
       if (organizerRole) {
         await Notification.create({
           userId: organizerObjectId,
@@ -1021,7 +1021,7 @@ export const selectOrganizer = async (req, res) => {
         });
         console.log('✅ Notification created');
       }
-      
+
       if (wsManager && typeof wsManager.sendToUser === 'function') {
         wsManager.sendToUser(organizerId, {
           type: 'notification',
@@ -1036,10 +1036,10 @@ export const selectOrganizer = async (req, res) => {
     } catch (notifError) {
       console.warn('⚠️ Notification error (non-critical):', notifError.message);
     }
-    
+
     console.log('🎉 SUCCESS! Returning response');
     console.log('='.repeat(50));
-    
+
     res.status(200).json({
       success: true,
       message: 'Organizer selected successfully',
@@ -1049,14 +1049,14 @@ export const selectOrganizer = async (req, res) => {
         selectedOrganizer: organizerId
       }
     });
-    
+
   } catch (error) {
     console.log('💥 CATASTROPHIC ERROR:');
     console.log('Error name:', error.name);
     console.log('Error message:', error.message);
     console.log('Error stack:', error.stack);
     console.log('='.repeat(50));
-    
+
     res.status(500).json({
       success: false,
       message: 'Error selecting organizer',
