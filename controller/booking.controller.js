@@ -61,7 +61,7 @@ export const initiateBooking = async (req, res) => {
     );
 
     // Update booking with both transaction ID and PIDX
-    booking.payment.transactionId = paymentResponse.transactionId;
+    // 
     booking.payment.pidx = paymentResponse.pidx;
     await booking.save();
 
