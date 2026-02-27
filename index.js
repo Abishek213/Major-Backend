@@ -16,6 +16,7 @@ import seedAIAgents from "./seeders/aiSeeder.js";
 import seedOrganizerDashboard from "./seeders/organizerDashboardSeeder.js";
 import seedplannerAgents from "./seeders/planningAgentSeeder.js";
 import seedbookingReview from "./seeders/bookingreviewSeeder.js";
+import seedeventRequest from "./seeders/eventrequestSeeder.js"
 // import seedAIPlanner from "./seeders/aiplannerSeeder.js";
 
 import authRoute from "./routes/auth.routes.js";
@@ -102,6 +103,7 @@ const connectDB = async () => {
       await seedOrganizerDashboard();
       await seedplannerAgents();
       await seedbookingReview();
+      await seedeventRequest();
       // await seedAIPlanner();
 
       console.log("Database seeding completed.");

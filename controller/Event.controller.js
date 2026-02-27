@@ -9,7 +9,10 @@ import AI_Agent from "../model/ai_agent.schema.js";
 import Review from "../model/review.schema.js";
 import AI_FeedbackSentiment from "../model/ai_feedbackSentiment.schema.js";
 
-const LIVE_STATUSES = new Set(["upcoming", "ongoing", "completed"]);
+// "approved" is included so that any legacy documents that were saved with the
+// old "approved" status (before it was removed from the schema enum) are
+// automatically migrated to the correct date-based status on the next sync.
+const LIVE_STATUSES = new Set(["upcoming", "ongoing", "completed", "approved"]);
 
 const computeLiveStatus = (eventDate) => {
   const now = new Date();
