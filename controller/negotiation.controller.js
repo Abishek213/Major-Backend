@@ -562,67 +562,152 @@ class NegotiationController {
 }
 
   // ============ REJECT OFFER ============
-  async rejectOffer(req, res) {
-    try {
-      const { negotiationId } = req.params;
-      const userId = req.user._id;
+async rejectOffer(req, res) {
+  try {
+    const { negotiationId } = req.params;
+    const userId = req.user._id;
 
-      const negotiation = await AI_NegotiationLog.findById(negotiationId);
-      if (!negotiation) {
-        return res.status(404).json(createResponse(false, 'Negotiation not found'));
-      }
+    const negotiation = await AI_NegotiationLog.findById(negotiationId);
+    if (!negotiation) {
+      return res.status(404).json(createResponse(false, 'Negotiation not found'));
+    }
 
-      const eventRequest = await EventRequest.findById(negotiation.eventRequest_id);
-      if (!eventRequest) {
-        return res.status(404).json(createResponse(false, 'Event request not found'));
-      }
+    const eventRequest = await EventRequest.findById(negotiation.eventRequest_id);
+    if (!eventRequest) {
+      return res.status(404).json(createResponse(false, 'Event request not found'));
+    }
 
-      // Verify authorization
-      const isUser = eventRequest.userId.toString() === userId.toString();
-      const isOrganizer = negotiation.metadata.organizerId === userId.toString();
+    // Verify authorization
+    const isUser = eventRequest.userId.toString() === userId.toString();
+    const isOrganizer = negotiation.metadata.organizerId === userId.toString();
 
-      if (!isUser && !isOrganizer) {
-        return res.status(403).json(createResponse(false, 'Unauthorized'));
-      }
+    if (!isUser && !isOrganizer) {
+      return res.status(403).json(createResponse(false, 'Unauthorized'));
+    }
 
-      // Update negotiation
-      negotiation.status = 'rejected';
-      await negotiation.save();
+    // Get role IDs for notifications
+    const Role = mongoose.model('Role');
+    const organizerRole = await Role.findOne({ role_Name: 'Organizer' }).lean();
+    const userRole = await Role.findOne({ role_Name: 'User' }).lean();
 
-      // Update organizer status if user rejected
-      if (isUser) {
-        const organizerResponse = eventRequest.interestedOrganizers.find(
-          org => org.organizerId.toString() === negotiation.metadata.organizerId
-        );
-        if (organizerResponse) {
-          organizerResponse.status = 'rejected';
-          await eventRequest.save();
-        }
-      }
+    // Get the last offer that was rejected
+    const lastOffer = negotiation.negotiation_history[negotiation.negotiation_history.length - 1];
 
-      // Notify the other party
-      const notifyUserId = isUser ? negotiation.metadata.organizerId : eventRequest.userId;
+    // Update negotiation status
+    negotiation.status = 'rejected';
+    await negotiation.save();
 
+    if (isUser) {
+      // USER rejected organizer's offer/counter
+      
+      // Notify ORGANIZER that their offer was rejected
       await Notification.create({
-        userId: notifyUserId,
-        type: 'offer_rejected',
-        title: 'Offer Rejected',
-        message: `Your offer has been rejected`,
+        userId: negotiation.metadata.organizerId,
+        forRole: organizerRole._id,
+        type: 'offer_rejected',  // ✅ Valid type from your enum
         eventRequestId: eventRequest._id,
+        message: `❌ Your offer of NPR ${lastOffer.offer.toLocaleString()} was rejected by the user`,
         status: 'unread',
         metadata: {
           negotiationId: negotiation._id,
-          rejectedBy: isUser ? 'user' : 'organizer'
+          rejectedAmount: lastOffer.offer,
+          rejectedBy: 'user',
+          reason: req.body.reason || 'User rejected the offer'
         }
       });
 
-      res.json(createResponse(true, 'Offer rejected successfully'));
+      // Notify USER that they rejected the offer (for their records)
+      await Notification.create({
+        userId: eventRequest.userId,
+        forRole: userRole._id,
+        type: 'offer_rejected',
+        eventRequestId: eventRequest._id,
+        message: `❌ You rejected the organizer's offer of NPR ${lastOffer.offer.toLocaleString()}`,
+        status: 'unread',
+        metadata: {
+          negotiationId: negotiation._id,
+          rejectedAmount: lastOffer.offer,
+          rejectedBy: 'user'
+        }
+      });
 
-    } catch (error) {
-      console.error('Reject offer error:', error);
-      res.status(500).json(createResponse(false, 'Failed to reject offer', null, error.message));
+    } else {
+      // ORGANIZER rejected user's counter offer
+      
+      // Notify USER that their counter was rejected
+      await Notification.create({
+        userId: eventRequest.userId,
+        forRole: userRole._id,
+        type: 'offer_rejected',
+        eventRequestId: eventRequest._id,
+        message: `❌ Your counter offer of NPR ${lastOffer.offer.toLocaleString()} was rejected by the organizer`,
+        status: 'unread',
+        metadata: {
+          negotiationId: negotiation._id,
+          rejectedAmount: lastOffer.offer,
+          rejectedBy: 'organizer',
+          reason: req.body.reason || 'Organizer rejected the counter offer'
+        }
+      });
+
+      // Notify ORGANIZER that they rejected the counter (for their records)
+      await Notification.create({
+        userId: negotiation.metadata.organizerId,
+        forRole: organizerRole._id,
+        type: 'offer_rejected',
+        eventRequestId: eventRequest._id,
+        message: `❌ You rejected the user's counter offer of NPR ${lastOffer.offer.toLocaleString()}`,
+        status: 'unread',
+        metadata: {
+          negotiationId: negotiation._id,
+          rejectedAmount: lastOffer.offer,
+          rejectedBy: 'organizer'
+        }
+      });
     }
+
+    // Broadcast via WebSocket
+    if (global.wsManager) {
+      // Notify both parties about the rejection
+      global.wsManager.sendToUser(eventRequest.userId.toString(), {
+        type: 'negotiation',
+        action: 'offer_rejected',
+        payload: {
+          eventRequestId: eventRequest._id,
+          negotiationId: negotiation._id,
+          rejectedAmount: lastOffer.offer,
+          rejectedBy: isUser ? 'user' : 'organizer',
+          message: isUser ? 'You rejected the offer' : 'Your counter offer was rejected'
+        }
+      });
+
+      global.wsManager.sendToUser(negotiation.metadata.organizerId, {
+        type: 'negotiation',
+        action: 'offer_rejected',
+        payload: {
+          eventRequestId: eventRequest._id,
+          negotiationId: negotiation._id,
+          rejectedAmount: lastOffer.offer,
+          rejectedBy: isUser ? 'user' : 'organizer',
+          message: isUser ? 'Your offer was rejected' : 'You rejected the counter offer'
+        }
+      });
+    }
+
+    res.json(createResponse(true, 'Offer rejected successfully', {
+      negotiation,
+      eventRequest: {
+        id: eventRequest._id,
+        status: eventRequest.status
+      },
+      rejectedAmount: lastOffer.offer
+    }));
+
+  } catch (error) {
+    console.error('Reject offer error:', error);
+    res.status(500).json(createResponse(false, 'Failed to reject offer', null, error.message));
   }
+}
 
   // ============ GET NEGOTIATION DETAILS ============
   async getNegotiation(req, res) {
