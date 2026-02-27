@@ -51,9 +51,6 @@ export const getDashboardStats = async (req, res) => {
               pendingCount: {
                 $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
               },
-              approvedCount: {
-                $sum: { $cond: [{ $eq: ["$status", "approved"] }, 1, 0] },
-              },
               upcomingCount: {
                 $sum: { $cond: [{ $eq: ["$status", "upcoming"] }, 1, 0] },
               },
@@ -458,6 +455,8 @@ export const approveRejectEvent = async (req, res) => {
       event.status = "rejected";
       event.isPublic = false;
     } else {
+      // "approved" is only the admin's intent — we never persist "approved" to the DB.
+      // Instead, derive the correct live status from the event date right now.
       const now = new Date();
       const evtDay = new Date(new Date(event.event_date).toDateString());
       const nowDay = new Date(now.toDateString());
@@ -483,7 +482,10 @@ export const approveRejectEvent = async (req, res) => {
     }
     res.status(200).json({
       success: true,
+      // Return the actual persisted status ("upcoming", "ongoing", "completed", or "rejected")
+      // so the frontend/notification layer can use the real value instead of "approved".
       message: `Event ${status} successfully`,
+      actualStatus: event.status,
       data: event,
     });
   } catch (error) {

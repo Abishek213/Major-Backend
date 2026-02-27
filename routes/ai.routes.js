@@ -21,6 +21,13 @@ import {
   performFraudCheck,
   analyzeReviewSentiment,
   getAIDashboard,
+  getOrganizerMetrics,
+  getOrganizerRevenue,
+  getOrganizerBookings,
+  getOrganizerTrends,
+  getOrganizerSentiment,
+  getOrganizerRatings,
+  getOrganizerEvents,
 } from "../controller/ai.controller.js";
 import {
   createReview,
