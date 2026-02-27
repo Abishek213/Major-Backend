@@ -44,7 +44,42 @@ class NegotiationController {
       );
 
       if (existingResponse) {
-        return res.status(400).json(createResponse(false, 'You have already responded to this request'));
+        const negotiation = await AI_NegotiationLog.findOne({
+          eventRequest_id: eventRequestId,
+          'metadata.organizerId': organizerId.toString()
+        });
+
+        if (!negotiation) {
+          return res.status(404).json(createResponse(false, 'Negotiation not found'));
+        }
+
+        const currentRound = negotiation.negotiation_round + 1;
+
+        negotiation.negotiation_history.push({
+          round: currentRound,
+          offer: proposedBudget,
+          party: 'organizer',
+          message: message || 'Counter offer',
+          timestamp: new Date()
+        });
+
+        negotiation.negotiation_round = currentRound;
+        negotiation.status = 'pending';
+        await negotiation.save();
+
+        existingResponse.proposedBudget = proposedBudget;
+        existingResponse.message = message || existingResponse.message;
+        existingResponse.status = 'pending';
+        await eventRequest.save();
+
+           return res.json(createResponse(true, 'Counter offer submitted successfully', {
+        negotiation: {
+          id: negotiation._id,
+          round: negotiation.negotiation_round,
+          status: negotiation.status
+        }
+      }));
+
       }
 
       // Add organizer to interestedOrganizers
@@ -128,6 +163,17 @@ class NegotiationController {
         }
       });
 
+
+      // Add the negotiation ID to the organizer's entry in interestedOrganizers
+      const organizerEntry = eventRequest.interestedOrganizers.find(
+        org => org.organizerId.toString() === organizerId.toString()
+      );
+
+      if (organizerEntry) {
+        organizerEntry.negotiationId = negotiationLog._id;  // Add this field
+        await eventRequest.save();
+      }
+
       console.log('✅ Negotiation log created with ID:', negotiationLog._id);
 
       // Notify AI service to start negotiation tracking
@@ -153,11 +199,22 @@ class NegotiationController {
       }
 
       // Create notification for user
+      // First, get the user role ID or use a default
+      let userRoleId = null;
+      try {
+        const Role = mongoose.model('Role');
+        const userRole = await Role.findOne({ role_Name: 'User' });
+        userRoleId = userRole?._id;
+      } catch (error) {
+        console.log('Could not find User role, using fallback');
+      }
+
+      // Create notification for user
+      // ✅ CORRECT - uses new_event_request type
       await Notification.create({
         userId: eventRequest.userId,
-        forRole: userRole._id,  // Required field!
-        type: 'event_request',   // ✅ Valid enum value from your schema
-        eventId: eventRequest.eventId || null, // Add this if event exists
+        forRole: userRoleId,
+        type: 'new_event_request',  // This requires eventRequestId, not eventId
         eventRequestId: eventRequest._id,
         message: `An organizer has shown interest in your ${eventRequest.eventType} event with an offer of NPR ${proposedBudget?.toLocaleString() || 'to be discussed'}`,
         status: 'unread',
@@ -237,13 +294,19 @@ class NegotiationController {
         return res.status(403).json(createResponse(false, 'Unauthorized'));
       }
 
-      // Since negotiation doesn't have organizerId, we need to find it from eventRequest
-      // The organizer who made the initial offer should be in interestedOrganizers
-      console.log('Looking for organizer offer with initial amount:', negotiation.initial_offer);
 
-      // Find the organizer who made the initial offer of 450,000
+      const organizerId = negotiation.metadata?.organizerId;
+
+      if (!organizerId) {
+        return res.status(404).json(createResponse(false, 'Organizer ID not found in negotiation'));
+      }
+
+
+      // console.log('Looking for organizer offer with initial amount:', negotiation.initial_offer);
+
+      // Find the organizer in interestedOrganizers by ID
       const organizerOffer = eventRequest.interestedOrganizers.find(
-        org => org.proposedBudget === negotiation.initial_offer
+        org => org.organizerId.toString() === organizerId.toString()
       );
 
       if (!organizerOffer) {
@@ -256,10 +319,10 @@ class NegotiationController {
         );
 
         return res.status(404).json(createResponse(false,
-          'Organizer offer not found. The initial offer amount does not match any organizer.'));
+          'Organizer not found. The organizer who started this negotiation is no longer in the list.'));
       }
 
-      const organizerId = organizerOffer.organizerId;
+      // const organizerId = organizerOffer.organizerId;
       console.log('Found organizer:', { organizerId, proposedBudget: organizerOffer.proposedBudget });
 
       // Update negotiation log
@@ -280,6 +343,8 @@ class NegotiationController {
       // Update organizer's proposed budget
       organizerOffer.proposedBudget = counterOffer;
       organizerOffer.message = message || organizerOffer.message;
+      organizerOffer.status = 'countered'; // Update status to show user countered
+
       await eventRequest.save();
 
       // Call AI service for counter-offer recommendation
@@ -366,126 +431,135 @@ class NegotiationController {
   }
 
   // ============ ACCEPT OFFER ============
-  async acceptOffer(req, res) {
-    try {
-      const { negotiationId } = req.params;
-      const userId = req.user._id;
+ async acceptOffer(req, res) {
+  try {
+    const { negotiationId } = req.params;
+    const userId = req.user._id;
 
-      const negotiation = await AI_NegotiationLog.findById(negotiationId);
-      if (!negotiation) {
-        return res.status(404).json(createResponse(false, 'Negotiation not found'));
-      }
-
-      const eventRequest = await EventRequest.findById(negotiation.eventRequest_id);
-      if (!eventRequest) {
-        return res.status(404).json(createResponse(false, 'Event request not found'));
-      }
-
-      // Verify authorization
-      const isUser = eventRequest.userId.toString() === userId.toString();
-      const isOrganizer = negotiation.metadata.organizerId === userId.toString();
-
-      if (!isUser && !isOrganizer) {
-        return res.status(403).json(createResponse(false, 'Unauthorized'));
-      }
-
-      // Get the last offer
-      const lastOffer = negotiation.negotiation_history[negotiation.negotiation_history.length - 1];
-
-      // Update negotiation
-      negotiation.status = 'accepted';
-      negotiation.final_offer = lastOffer.offer;
-      await negotiation.save();
-
-      // Update event request
-      if (isUser) {
-        // User is accepting - mark as deal_done
-        eventRequest.status = 'deal_done';
-
-        // Update the accepted organizer's status
-        const organizerResponse = eventRequest.interestedOrganizers.find(
-          org => org.organizerId.toString() === negotiation.metadata.organizerId
-        );
-        if (organizerResponse) {
-          organizerResponse.status = 'accepted';
-        }
-
-        // Reject all other organizers
-        eventRequest.interestedOrganizers.forEach(org => {
-          if (org.organizerId.toString() !== negotiation.metadata.organizerId) {
-            org.status = 'rejected';
-          }
-        });
-
-        await eventRequest.save();
-
-        // Notify organizer
-        await Notification.create({
-          userId: negotiation.metadata.organizerId,
-          type: 'offer_accepted',
-          title: '🎉 Your Offer Has Been Accepted!',
-          message: `User accepted your offer of NPR ${lastOffer.offer.toLocaleString()}`,
-          eventRequestId: eventRequest._id,
-          status: 'unread',
-          metadata: {
-            negotiationId: negotiation._id,
-            finalAmount: lastOffer.offer
-          }
-        });
-
-      } else {
-        // Organizer is accepting user's counter
-        await Notification.create({
-          userId: eventRequest.userId,
-          type: 'offer_accepted',
-          title: '🎉 Organizer Accepted Your Counter Offer!',
-          message: `Organizer accepted your offer of NPR ${lastOffer.offer.toLocaleString()}`,
-          eventRequestId: eventRequest._id,
-          status: 'unread',
-          metadata: {
-            negotiationId: negotiation._id,
-            finalAmount: lastOffer.offer
-          }
-        });
-      }
-
-      // Broadcast via WebSocket
-      wsManager.sendToUser(eventRequest.userId.toString(), {
-        type: 'negotiation',
-        action: 'offer_accepted',
-        payload: {
-          eventRequestId: eventRequest._id,
-          negotiationId: negotiation._id,
-          finalAmount: lastOffer.offer,
-          acceptedBy: isUser ? 'user' : 'organizer'
-        }
-      });
-
-      wsManager.sendToUser(negotiation.metadata.organizerId, {
-        type: 'negotiation',
-        action: 'offer_accepted',
-        payload: {
-          eventRequestId: eventRequest._id,
-          negotiationId: negotiation._id,
-          finalAmount: lastOffer.offer,
-          acceptedBy: isUser ? 'user' : 'organizer'
-        }
-      });
-
-      res.json(createResponse(true, 'Offer accepted successfully', {
-        negotiation,
-        eventRequest: {
-          id: eventRequest._id,
-          status: eventRequest.status
-        },
-        finalAmount: lastOffer.offer
-      }));
-
-    } catch (error) {
-      console.error('Accept offer error:', error);
-      res.status(500).json(createResponse(false, 'Failed to accept offer', null, error.message));
+    const negotiation = await AI_NegotiationLog.findById(negotiationId);
+    if (!negotiation) {
+      return res.status(404).json(createResponse(false, 'Negotiation not found'));
     }
+
+    const eventRequest = await EventRequest.findById(negotiation.eventRequest_id);
+    if (!eventRequest) {
+      return res.status(404).json(createResponse(false, 'Event request not found'));
+    }
+
+    // Verify authorization
+    const isUser = eventRequest.userId.toString() === userId.toString();
+    const isOrganizer = negotiation.metadata.organizerId === userId.toString();
+
+    if (!isUser && !isOrganizer) {
+      return res.status(403).json(createResponse(false, 'Unauthorized'));
+    }
+
+    // Get the last offer
+    const lastOffer = negotiation.negotiation_history[negotiation.negotiation_history.length - 1];
+
+    // Update negotiation
+    negotiation.status = 'accepted';
+    negotiation.final_offer = lastOffer.offer;
+    await negotiation.save();
+
+    // Get role IDs for notifications
+    const Role = mongoose.model('Role');
+    const organizerRole = await Role.findOne({ role_Name: 'Organizer' }).lean();
+    const userRole = await Role.findOne({ role_Name: 'User' }).lean();
+
+    // Update event request
+    if (isUser) {
+      // User is accepting - mark as deal_done
+      eventRequest.status = 'deal_done';
+
+      // Update the accepted organizer's status
+      const organizerResponse = eventRequest.interestedOrganizers.find(
+        org => org.organizerId.toString() === negotiation.metadata.organizerId
+      );
+      if (organizerResponse) {
+        organizerResponse.status = 'accepted';
+      }
+
+      // Reject all other organizers
+      eventRequest.interestedOrganizers.forEach(org => {
+        if (org.organizerId.toString() !== negotiation.metadata.organizerId) {
+          org.status = 'rejected';
+        }
+      });
+
+      await eventRequest.save();
+
+      // Notify organizer - FIXED VERSION
+      await Notification.create({
+        userId: negotiation.metadata.organizerId,
+        forRole: organizerRole._id,  // ✅ Required field added
+        type: 'new_event_request',    // ✅ Valid type
+        eventRequestId: eventRequest._id,
+        message: `🎉 Your Offer Has Been Accepted! User accepted your offer of NPR ${lastOffer.offer.toLocaleString()}`,
+        status: 'unread',
+        metadata: {
+          negotiationId: negotiation._id,
+          finalAmount: lastOffer.offer,
+          acceptedBy: 'user'
+        }
+      });
+
+    } else {
+      // Organizer is accepting user's counter - FIXED VERSION
+      await Notification.create({
+        userId: eventRequest.userId,
+        forRole: userRole._id,  // ✅ Required field added
+        type: 'new_event_request',  // ✅ Valid type
+        eventRequestId: eventRequest._id,
+        message: `🎉 Organizer Accepted Your Counter Offer! Your offer of NPR ${lastOffer.offer.toLocaleString()} was accepted`,
+        status: 'unread',
+        metadata: {
+          negotiationId: negotiation._id,
+          finalAmount: lastOffer.offer,
+          acceptedBy: 'organizer'
+        }
+      });
+    }
+
+    // Broadcast via WebSocket
+    if (global.wsManager) {
+      global.wsManager.sendToUser(eventRequest.userId.toString(), {
+        type: 'negotiation',
+        action: 'offer_accepted',
+        payload: {
+          eventRequestId: eventRequest._id,
+          negotiationId: negotiation._id,
+          finalAmount: lastOffer.offer,
+          acceptedBy: isUser ? 'user' : 'organizer'
+        }
+      });
+
+      global.wsManager.sendToUser(negotiation.metadata.organizerId, {
+        type: 'negotiation',
+        action: 'offer_accepted',
+        payload: {
+          eventRequestId: eventRequest._id,
+          negotiationId: negotiation._id,
+          finalAmount: lastOffer.offer,
+          acceptedBy: isUser ? 'user' : 'organizer'
+        }
+      });
+    }
+
+    res.json(createResponse(true, 'Offer accepted successfully', {
+      negotiation,
+      eventRequest: {
+        id: eventRequest._id,
+        status: eventRequest.status
+      },
+      finalAmount: lastOffer.offer
+    }));
+
+  } catch (error) {
+    console.error('Accept offer error:', error);
+    res.status(500).json(createResponse(false, 'Failed to accept offer', null, error.message));
   }
+}
 
   // ============ REJECT OFFER ============
   async rejectOffer(req, res) {
