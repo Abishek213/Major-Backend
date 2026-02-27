@@ -40,13 +40,26 @@ jobs:
             -e PORT='${{ secrets.PORT }}' \
             -e MongoDB_URI='${{ secrets.MONGO_URI }}' \
             -e JWT_SECRET='${{ secrets.JWT_SECRET }}' \
-            -e JWT_EXPIRY='${{ secrets.JWT_EXPIRY }}' \
+            -e JWT_EXPIRES_IN='${{ secrets.JWT_EXPIRES_IN }}' \
+            -e NODE_ENV='production' \
+            -e ALLOWED_ORIGINS='${{ secrets.ALLOWED_ORIGINS }}' \
             -e EMAIL_USER='${{ secrets.EMAIL_USER }}' \
             -e EMAIL_PASS='${{ secrets.EMAIL_PASS }}' \
             -e TWILIO_ACCOUNT_SID='${{ secrets.TWILIO_ACCOUNT_SID }}' \
             -e TWILIO_AUTH_TOKEN='${{ secrets.TWILIO_AUTH_TOKEN }}' \
             -e TWILIO_PHONE_NUMBER='${{ secrets.TWILIO_PHONE_NUMBER }}' \
+            -e KHALTI_PUBLIC_KEY='${{ secrets.KHALTI_PUBLIC_KEY }}' \
             -e KHALTI_SECRET_KEY='${{ secrets.KHALTI_SECRET_KEY }}' \
+            -e KHALTI_BASE_URL='${{ secrets.KHALTI_BASE_URL }}' \
+            -e ESEWA_MERCHANT_CODE='${{ secrets.ESEWA_MERCHANT_CODE }}' \
+            -e ESEWA_PAYMENT_URL='${{ secrets.ESEWA_PAYMENT_URL }}' \
             -e ESEWA_SECRET_KEY='${{ secrets.ESEWA_SECRET_KEY }}' \
+            -e SUCCESS_URL='${{ secrets.SUCCESS_URL }}' \
+            -e FAILURE_URL='${{ secrets.FAILURE_URL }}' \
+            -e WEBSITE_URL='${{ secrets.WEBSITE_URL }}' \
+            -e AI_SERVICE_URL='${{ secrets.AI_SERVICE_URL }}' \
+            -e AI_AGENT_URL='${{ secrets.AI_AGENT_URL }}' \
+            -e AI_ENABLED='true' \
             -e GEMINI_API_KEY='${{ secrets.GEMINI_API_KEY }}' \
+            -e OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}' \
             himanshhhh/eventa-backend:latest
