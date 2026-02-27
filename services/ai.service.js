@@ -25,7 +25,8 @@ import Review from "../model/review.schema.js";
 
 class AIService {
   constructor() {
-    this.aiAgentUrl = process.env.AI_AGENT_SERVICE_URL || "http://localhost:3002"
+    this.aiAgentUrl =
+      process.env.AI_AGENT_SERVICE_URL || "http://localhost:3002";
 
     // ── Built-in FAQ knowledge base ─────────────────────────────────────────
     // Used as fallback when the external AI agent is unreachable.
@@ -88,7 +89,13 @@ class AIService {
           "If you don't see it, check your spam folder or contact support@eventa.com.",
       },
       {
-        keywords: ["organizer", "create event", "host", "list event", "publish"],
+        keywords: [
+          "organizer",
+          "create event",
+          "host",
+          "list event",
+          "publish",
+        ],
         response:
           "To create an event, register or log in as an organizer. " +
           "Go to Dashboard → Create Event and fill in the details (name, date, venue, tickets, pricing). " +
@@ -96,6 +103,49 @@ class AIService {
           "For organizer onboarding help, email organizers@eventa.com.",
       },
     ];
+  }
+
+  // ============================================================================
+  // PRIVATE HELPERS
+  // ============================================================================
+
+  /**
+   * Generic HTTP helper for all calls to the AI Agent service.
+   * Returns response.data directly so callers don't need to unwrap axios.
+   *
+   * FIX: Previously, `_request` and `_isAgentUnavailable` were called throughout
+   * the file but never defined, causing runtime "not a function" errors on every
+   * method that used them (getBookingSupportStats, getPlanningSuggestions,
+   * getDashboardInsights, answerDashboardQuery, getDashboardRecommendations,
+   * initializeDashboardAgent).
+   */
+  async _request(method, path, data = null, options = {}) {
+    const url = `${this.aiAgentUrl}${path}`;
+    const config = {
+      method,
+      url,
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    };
+    if (data) config.data = data;
+    const response = await axios(config);
+    return response.data;
+  }
+
+  /**
+   * Returns true when the axios error indicates the AI Agent server is simply
+   * unreachable (network-level), so callers can switch to fallback gracefully.
+   */
+  _isAgentUnavailable(error) {
+    return (
+      error.code === "ECONNREFUSED" ||
+      error.code === "ENOTFOUND" ||
+      error.code === "ETIMEDOUT" ||
+      error.code === "ECONNRESET" ||
+      error.message?.includes("ECONNREFUSED") ||
+      error.message?.includes("connect ETIMEDOUT") ||
+      error.message?.includes("Network Error")
+    );
   }
 
   // ============================================================================
@@ -176,7 +226,6 @@ class AIService {
         `📡 Calling AI Agent | candidates: ${candidateEvents.length} | wishlist: ${userContext.wishlistEvents.length} | booked: ${userContext.bookedEvents.length}`
       );
 
-      // ✅ FIXED: Changed from /api/recommendations to /api/agents/user/recommendations
       const response = await axios.post(
         `${this.aiAgentUrl}/api/agents/user/recommendations`,
         {
@@ -188,7 +237,11 @@ class AIService {
         { timeout: 8000 }
       );
 
-      return response.success ? response.recommendations : [];
+      // FIX (Bug 1): response is the full axios object — must access response.data,
+      // not response directly. Previously `response.success` was always undefined,
+      // so this always silently returned [] even when the AI Agent responded correctly.
+      const body = response.data;
+      return body?.success ? body.recommendations ?? [] : [];
     } catch (error) {
       console.error("AI Agent call failed:", error.message);
       return [];
@@ -196,35 +249,80 @@ class AIService {
   }
 
   async getRecommendationAgent() {
-    let agent = await AI_Agent.findOne({
-      name: "Event Recommendation Agent",
-      agent_type: "admin",
-    });
-    if (!agent) {
-      agent = await AI_Agent.create({
-        name: "Event Recommendation Agent",
-        role: "assistant",
-        agent_type: "admin",
-        capabilities: ["event_recommendation", "user_behavior_analysis"],
-        status: "active",
-      });
-      console.log("🤖 Created recommendation agent:", agent._id);
-    }
+    // FIX (Bug 4): agent_type was "admin" — corrected to "user" via $set.
+    //
+    // FIX (Race condition): The previous findOne → create pattern caused an
+    // E11000 duplicate key error when multiple requests arrived simultaneously.
+    // All concurrent calls saw no existing agent (findOne returned null before
+    // any create completed), then all tried to create → all but the first
+    // failed with a MongoDB duplicate key error, bubbling up as
+    // "AI Agent unavailable: E11000 duplicate key error".
+    //
+    // findOneAndUpdate with upsert is atomic at the DB level: only one
+    // operation will insert; concurrent calls get the same document.
+    //
+    // CRITICAL — filter by `name` ONLY (not `name + agent_type`):
+    // The DB may have an existing record with agent_type: "admin" (the old bug).
+    // If we filter on both fields, findOneAndUpdate finds no match and tries
+    // to upsert a NEW document → unique index on `name_1` blocks it → E11000.
+    // Filtering by name alone always matches the existing record and updates it
+    // in place, correcting agent_type from "admin" → "user" without creating a
+    // duplicate. $set applies to both new inserts and existing doc updates;
+    // $setOnInsert-only fields are written only on the upsert path.
+    const agent = await AI_Agent.findOneAndUpdate(
+      { name: "Event Recommendation Agent" },
+      {
+        $set: {
+          agent_type: "user", // corrects existing "admin" records in place
+          status: "active",
+        },
+        $setOnInsert: {
+          role: "assistant",
+          capabilities: ["event_recommendation", "user_behavior_analysis"],
+        },
+      },
+      { upsert: true, new: true }
+    );
     return agent;
   }
 
   async storeRecommendations(userId, recommendations, agentId) {
     if (!recommendations.length) return [];
-    const docs = recommendations.map((rec) => ({
-      user_id: userId,
-      event_id: rec.event_id,
-      agent_id: agentId,
-      confidence_score: rec.confidence_score,
-      recommendation_reason: rec.recommendation_reason,
+
+    // FIX: Was AI_Recommendation.insertMany(docs). insertMany is NOT idempotent:
+    // when 3 concurrent requests all hit the endpoint simultaneously (as observed
+    // in the backend logs: "💾 Stored 20 recommendations" × 3), each call stores
+    // a fresh batch of 20 records. The DB ended up with 60 rows for the same user
+    // with overlapping event_ids — causing React duplicate key warnings and the
+    // same event card appearing multiple times in the UI.
+    //
+    // bulkWrite with updateOne + upsert IS idempotent: if a (user_id, event_id)
+    // pair already exists, it updates it in-place rather than inserting a second
+    // row. Concurrent calls converge to the same 20 records regardless of how
+    // many times they fire.
+    const ops = recommendations.map((rec) => ({
+      updateOne: {
+        filter: { user_id: userId, event_id: rec.event_id },
+        update: {
+          $set: {
+            agent_id: agentId,
+            confidence_score: rec.confidence_score,
+            recommendation_reason: rec.recommendation_reason,
+            source: "ai_agent",
+          },
+        },
+        upsert: true,
+      },
     }));
-    const saved = await AI_Recommendation.insertMany(docs);
-    console.log(`💾 Stored ${saved.length} recommendations`);
-    return saved;
+
+    const result = await AI_Recommendation.bulkWrite(ops, { ordered: false });
+    const count = (result.upsertedCount || 0) + (result.modifiedCount || 0);
+    console.log(
+      `💾 Stored ${count} recommendations (${result.upsertedCount || 0} new, ${
+        result.modifiedCount || 0
+      } updated)`
+    );
+    return result;
   }
 
   async getCachedRecommendations(userId, limit) {
@@ -281,6 +379,9 @@ class AIService {
         time: event.time,
         category: event.category,
         tags: event.tags || [],
+        image: event.image || null,
+        attendees: event.attendees || [],
+        totalSlots: event.totalSlots || 0,
         source: "fallback",
       }));
     } catch (error) {
@@ -646,10 +747,10 @@ class AIService {
 
       return response.data;
     } catch (error) {
-      console.error("Booking support stats error:", error.message);
+      console.error("Dashboard agent health check error:", error.message);
       throw new Error(
         error.response?.data?.message ||
-          "Failed to get booking support statistics"
+          "Failed to get dashboard agent health status"
       );
     }
   }

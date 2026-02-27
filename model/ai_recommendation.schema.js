@@ -15,7 +15,7 @@ const aiRecommendationSchema = new mongoose.Schema(
     agent_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "AI_Agent",
-      required: true,
+      default: null,
     },
     confidence_score: {
       type: Number,
@@ -25,7 +25,12 @@ const aiRecommendationSchema = new mongoose.Schema(
     },
     recommendation_reason: {
       type: String,
-      required: true,
+      default: "",
+    },
+    source: {
+      type: String,
+      enum: ["ai_agent", "database_cache", "fallback", "emergency_fallback"],
+      default: "ai_agent",
     },
   },
   {
@@ -33,9 +38,16 @@ const aiRecommendationSchema = new mongoose.Schema(
   }
 );
 
-// Indexes matching your style
+// Compound index for the getCachedRecommendations query:
+// AI_Recommendation.find({ user_id, createdAt: { $gte: oneDayAgo } })
+// .sort({ confidence_score: -1, createdAt: -1 })
 aiRecommendationSchema.index({ user_id: 1, createdAt: -1 });
+
+// Index for event-level queries (e.g. how often an event has been recommended)
 aiRecommendationSchema.index({ event_id: 1, confidence_score: -1 });
+
+// Sparse index to speed up agent-level analytics (optional field)
+aiRecommendationSchema.index({ agent_id: 1 }, { sparse: true });
 
 const AI_Recommendation = mongoose.model(
   "AI_Recommendation",

@@ -9,28 +9,24 @@ import Booking from "../model/booking.schema.js";
 import Event from "../model/event.schema.js";
 import AIService from "../services/ai.service.js";
 
-/**
- * ============================================================================
- * BACKEND AI CONTROLLER
- * ============================================================================
- *
- * This controller acts as a proxy between Frontend and AI Agent Service
- *
- * ARCHITECTURE:
- * Frontend → Backend (this controller) → AI Agent Service
- *
- * RESPONSIBILITIES:
- * - Authentication & authorization
- * - Request validation
- * - Database operations
- * - Caching
- * - Error handling
- * - Logging
- *
- * ============================================================================
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-user AI generation coalescing map (Bug B fix)
+//
+// Problem: React StrictMode (dev) and concurrent renders cause 3 simultaneous
+// GET /ai/recommendations/me requests. All 3 find an empty cache, call the AI
+// agent 3×, and call storeRecommendations 3×. Without the compound unique index
+// physically present in MongoDB, this inserts 60 rows (3 × 20) for 20 unique
+// events. The read-side dedup catches it, but the AI agent is wastefully called
+// 3 times and the DB accumulates stale duplicate rows on every cold start.
+//
+// Fix: store the in-flight AI generation Promise per userId. Concurrent requests
+// for the same user wait on the SAME promise rather than starting their own.
+// All waiters then read from cache once the first completes.
+// Map is module-level (singleton per Node.js process) — correct for a single
+// instance; for multi-instance deployments replace with Redis-based distributed lock.
+// ─────────────────────────────────────────────────────────────────────────────
+const _inFlightGeneration = new Map(); // userId → Promise<void>
 
-// ==================== AI AGENT MANAGEMENT ====================
 export const createAgent = async (req, res) => {
   try {
     const agent = await AI_Agent.create(req.body);
@@ -187,23 +183,226 @@ export const createRecommendation = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/ai/recommendations/me
+ *
+ * Called by the frontend RecommendationService → recommendationService.js
+ * Returns DB-stored recommendations for the authenticated user, with the full
+ * event and category fields populated so the frontend normalizer works correctly.
+ *
+ * FIXES APPLIED:
+ *
+ * Bug 2 — This function previously only read from the DB and never triggered AI
+ * generation. If the DB was empty (first-time user, expired cache) it returned [].
+ * Now it falls through: DB cache → AI Agent → fallback events, matching the same
+ * resilience pattern used in getUserRecommendations.
+ *
+ * Bug 3 — event_id was populated with a single `.populate("event_id")` call,
+ * which left the nested `category` field as a raw ObjectId. The frontend
+ * normalizer reads `ev.category?.category_Name`, so every card showed "General".
+ * Fixed with a nested populate that also resolves `category` inside `event_id`.
+ *
+ * Bug 5 — A manual for-loop re-fetched the event document when `event_id` was
+ * a plain string. After `.populate("event_id").lean()`, event_id is already an
+ * object, so the condition `typeof rec.event_id === "string"` was always false
+ * and the loop never ran. The loop was dead code and has been removed.
+ */
 export const getMyRecommendations = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { limit = 10 } = req.query;
+    const { limit = 10, refresh = "false" } = req.query;
+    const parsedLimit = parseInt(limit);
 
-    const recommendations = await AI_Recommendation.find({ user_id: userId })
-      .populate(
-        "event_id",
-        "event_name description location price image event_date time category"
-      )
-      .populate("agent_id", "name role agent_type")
-      .sort({ confidence_score: -1, createdAt: -1 })
-      .limit(parseInt(limit));
+    let recommendations = [];
+    let source = "cache";
+
+    // ── Step 1: Try DB cache first (skip when ?refresh=true) ───────────────
+    if (refresh !== "true") {
+      const raw = await AI_Recommendation.find({ user_id: userId })
+        .populate({
+          path: "event_id",
+          populate: { path: "category", select: "category_Name" },
+        })
+        .populate("agent_id", "name role agent_type")
+        .sort({ confidence_score: -1, createdAt: -1 })
+        // Fetch more than limit before dedup so we still return parsedLimit unique events
+        .limit(parsedLimit * 3)
+        .lean();
+
+      // FIX (Duplicate React key): The DB may still contain stale duplicate
+      // rows for the same (user_id, event_id) pair inserted before the bulkWrite
+      // upsert fix was deployed. The unique compound index on the schema prevents
+      // future duplicates but does not clean up existing ones.
+      // Dedup by event_id string so the frontend never receives two records for
+      // the same event — which caused React duplicate key warnings and the same
+      // card appearing twice in the recommendations grid.
+      const seen = new Set();
+      recommendations = raw
+        .filter((rec) => {
+          const evId =
+            rec.event_id?._id?.toString() || rec.event_id?.toString();
+          if (!evId || seen.has(evId)) return false;
+          seen.add(evId);
+          return true;
+        })
+        .slice(0, parsedLimit);
+
+      if (recommendations.length > 0) {
+        source = "cache";
+      }
+    }
+
+    // ── Step 2: Generate via AI Agent if cache miss or refresh requested ────
+    if (recommendations.length === 0 || refresh === "true") {
+      // FIX (Bug B): Request coalescing — prevent concurrent requests for the
+      // same user each triggering their own AI generation + store cycle.
+      //
+      // If an AI generation for this userId is already in progress (e.g. from
+      // React StrictMode double-mount or two browser tabs), wait for the
+      // existing promise to resolve rather than starting a new one.
+      // All waiters then re-read from cache in Step 1's query above.
+      const existingPromise = _inFlightGeneration.get(userId);
+
+      if (existingPromise) {
+        // Another request is already generating — wait for it, then read cache.
+        try {
+          await existingPromise;
+        } catch {
+          // If the leader failed, we'll fall through to Step 3 fallback below.
+        }
+
+        // Re-read from cache now that the leader has stored recommendations.
+        if (refresh !== "true") {
+          const rawAfterWait = await AI_Recommendation.find({ user_id: userId })
+            .populate({
+              path: "event_id",
+              populate: { path: "category", select: "category_Name" },
+            })
+            .populate("agent_id", "name role agent_type")
+            .sort({ confidence_score: -1, createdAt: -1 })
+            .limit(parsedLimit * 3)
+            .lean();
+
+          const seenWait = new Set();
+          recommendations = rawAfterWait
+            .filter((rec) => {
+              const evId =
+                rec.event_id?._id?.toString() || rec.event_id?.toString();
+              if (!evId || seenWait.has(evId)) return false;
+              seenWait.add(evId);
+              return true;
+            })
+            .slice(0, parsedLimit);
+
+          if (recommendations.length > 0) source = "cache";
+        }
+      } else {
+        // This request is the leader — run AI generation and coalesce waiters.
+        const generationPromise = (async () => {
+          const agent = await AIService.getRecommendationAgent();
+          const aiRecommendations = await AIService.getAIRecommendations(
+            userId,
+            parsedLimit
+          );
+
+          if (aiRecommendations.length > 0) {
+            await AIService.storeRecommendations(
+              userId,
+              aiRecommendations,
+              agent._id
+            );
+
+            await AI_ActionLog.create({
+              agentId: agent._id,
+              userId,
+              logType: "recommendation",
+              actionDetails: {
+                count: aiRecommendations.length,
+                source: "ai_agent",
+              },
+            });
+          }
+
+          return aiRecommendations.length;
+        })();
+
+        _inFlightGeneration.set(userId, generationPromise);
+
+        try {
+          await generationPromise;
+
+          // Re-fetch from DB with full population so the response has the same
+          // shape the frontend normalizer expects.
+          const rawAI = await AI_Recommendation.find({ user_id: userId })
+            .populate({
+              path: "event_id",
+              populate: { path: "category", select: "category_Name" },
+            })
+            .populate("agent_id", "name role agent_type")
+            .sort({ confidence_score: -1, createdAt: -1 })
+            .limit(parsedLimit * 3)
+            .lean();
+
+          const seenAI = new Set();
+          recommendations = rawAI
+            .filter((rec) => {
+              const evId =
+                rec.event_id?._id?.toString() || rec.event_id?.toString();
+              if (!evId || seenAI.has(evId)) return false;
+              seenAI.add(evId);
+              return true;
+            })
+            .slice(0, parsedLimit);
+
+          if (recommendations.length > 0) source = "ai_agent";
+        } catch (aiError) {
+          console.warn("AI Agent unavailable:", aiError.message);
+        } finally {
+          // Always release the lock so future requests don't wait indefinitely.
+          _inFlightGeneration.delete(userId);
+        }
+      }
+    }
+
+    // ── Step 3: Fallback to popular events if DB + AI both returned nothing ─
+    if (recommendations.length === 0) {
+      const fallbackRaw = await AIService.getFallbackRecommendations(
+        userId,
+        parsedLimit
+      );
+
+      // Shape the fallback data to match the DB-populated structure that
+      // the frontend normalizeRecommendation() function expects, where
+      // rec.event_id is a full event object (not a raw ID).
+      recommendations = fallbackRaw.map((rec) => ({
+        _id: rec.event_id,
+        event_id: {
+          _id: rec.event_id,
+          event_name: rec.event_name,
+          description: rec.description,
+          price: rec.price,
+          location: rec.location,
+          event_date: rec.event_date,
+          time: rec.time,
+          category: rec.category,
+          tags: rec.tags || [],
+          image: rec.image || null,
+          attendees: rec.attendees || [],
+          totalSlots: rec.totalSlots || 0,
+        },
+        confidence_score: rec.confidence_score,
+        recommendation_reason: rec.recommendation_reason,
+        source: rec.source,
+        agent_id: null,
+      }));
+
+      source = "fallback";
+    }
 
     res.json({
       success: true,
       count: recommendations.length,
+      source,
       data: recommendations,
     });
   } catch (error) {
@@ -212,6 +411,7 @@ export const getMyRecommendations = async (req, res) => {
 };
 
 // ==================== BOOKING SUPPORT CHAT ====================
+
 export const chatBookingSupport = async (req, res) => {
   try {
     const {
@@ -220,7 +420,8 @@ export const chatBookingSupport = async (req, res) => {
       agent = "assistant",
       agentType,
     } = req.body;
-    const resolvedAgent = agent !== "assistant" ? agent : (agentType ?? "assistant");
+    const resolvedAgent =
+      agent !== "assistant" ? agent : agentType ?? "assistant";
     const userId = req.user?.id || req.body.userId;
     const sessionId = req.body.sessionId;
 
@@ -237,7 +438,7 @@ export const chatBookingSupport = async (req, res) => {
 
     console.log(
       `💬 Booking support chat from ${userId || sessionId || "anonymous"} ` +
-      `[lang=${language}, agent=${resolvedAgent}]`
+        `[lang=${language}, agent=${resolvedAgent}]`
     );
 
     const response = await AIService.chatBookingSupport({
@@ -356,7 +557,7 @@ export const getBookingSupportStats = async (req, res) => {
 };
 
 // ============================================================================
-// EVENT REQUEST AI PROCESSING (NEW)
+// EVENT REQUEST AI PROCESSING
 // These endpoints are called internally by eventrequest.controller.js
 // via AI_AGENT_URL — they use the existing AIService / booking-support
 // infrastructure to extract entities and match organizers from natural language.
@@ -383,7 +584,9 @@ export const processEventRequest = async (req, res) => {
       });
     }
 
-    console.log(`🎯 Processing event request from user: ${userId || "anonymous"}`);
+    console.log(
+      `🎯 Processing event request from user: ${userId || "anonymous"}`
+    );
     console.log(`📝 Natural language: ${naturalLanguage.substring(0, 100)}...`);
 
     // ── Step 1: Extract entities from the natural language description ─────
@@ -423,14 +626,20 @@ export const processEventRequest = async (req, res) => {
       }
     } catch (aiErr) {
       // AI extraction failed — local extraction is already set, continue
-      console.warn("AI entity extraction failed, using local fallback:", aiErr.message);
+      console.warn(
+        "AI entity extraction failed, using local fallback:",
+        aiErr.message
+      );
     }
 
     // ── Step 2: Find matching organizers from the database ─────────────────
     const matchedOrganizers = await findMatchingOrganizers(extractedEntities);
 
     // ── Step 3: Build budget analysis ─────────────────────────────────────
-    const budgetAnalysis = analyzeBudget(extractedEntities.budget, extractedEntities.attendees);
+    const budgetAnalysis = analyzeBudget(
+      extractedEntities.budget,
+      extractedEntities.attendees
+    );
 
     // ── Step 4: Build AI suggestions ──────────────────────────────────────
     const aiSuggestions = buildSuggestions(extractedEntities);
@@ -444,7 +653,10 @@ export const processEventRequest = async (req, res) => {
           role: "assistant",
           agent_type: "user",
           status: "active",
-          capabilities: { event_request_processing: true, entity_extraction: true },
+          capabilities: {
+            event_request_processing: true,
+            entity_extraction: true,
+          },
         });
       }
 
@@ -491,7 +703,9 @@ export const getEventSuggestions = async (req, res) => {
   try {
     const { eventType, budget, location, date } = req.query;
 
-    console.log(`🔍 Fetching organizer suggestions for: ${eventType} in ${location}`);
+    console.log(
+      `🔍 Fetching organizer suggestions for: ${eventType} in ${location}`
+    );
 
     const extractedEntities = {
       eventType: eventType || "General",
@@ -550,30 +764,45 @@ function extractEntitiesLocally(text) {
 
   // Location
   const locationKeywords = [
-    "kathmandu", "pokhara", "lalitpur", "bhaktapur", "biratnagar",
-    "birgunj", "dharan", "butwal", "chitwan", "online", "virtual",
+    "kathmandu",
+    "pokhara",
+    "lalitpur",
+    "bhaktapur",
+    "biratnagar",
+    "birgunj",
+    "dharan",
+    "butwal",
+    "chitwan",
+    "online",
+    "virtual",
   ];
   const locations = locationKeywords.filter((loc) => lower.includes(loc));
-  if (locations.length === 0 && lower.includes("nepal")) locations.push("Nepal");
+  if (locations.length === 0 && lower.includes("nepal"))
+    locations.push("Nepal");
 
   // Date
   let date = "";
   if (lower.includes("next month")) date = "Next Month";
   else if (lower.includes("next week")) date = "Next Week";
-  else if (lower.includes("this weekend") || lower.includes("weekend")) date = "This Weekend";
+  else if (lower.includes("this weekend") || lower.includes("weekend"))
+    date = "This Weekend";
   else if (lower.includes("tomorrow")) date = "Tomorrow";
   else if (lower.includes("today")) date = "Today";
 
   // Budget
   let budget = "";
-  const budgetMatch = lower.match(/\$[\d,]+|rs\.?\s*[\d,]+|npr\.?\s*[\d,]+|[\d,]+\s*(?:budget|npr|rs)/i);
+  const budgetMatch = lower.match(
+    /\$[\d,]+|rs\.?\s*[\d,]+|npr\.?\s*[\d,]+|[\d,]+\s*(?:budget|npr|rs)/i
+  );
   if (budgetMatch) budget = budgetMatch[0];
   else if (lower.includes("free")) budget = "Free";
   else if (lower.includes("low budget")) budget = "Low Budget";
 
   // Attendees
   let attendees = "";
-  const attendeeMatch = lower.match(/(\d+)\s*(?:people|persons|attendees|guests|participants)/i);
+  const attendeeMatch = lower.match(
+    /(\d+)\s*(?:people|persons|attendees|guests|participants)/i
+  );
   if (attendeeMatch) attendees = attendeeMatch[1];
   else if (lower.includes("small")) attendees = "< 50";
   else if (lower.includes("large")) attendees = "> 200";
@@ -609,7 +838,8 @@ async function findMatchingOrganizers(entities) {
       matchScore: Math.max(95 - idx * 7, 60),
       specialization: entities.eventType || "General Events",
       rating: (4.5 - idx * 0.1).toFixed(1),
-      responseTime: idx === 0 ? "< 1 hour" : idx === 1 ? "< 3 hours" : "< 24 hours",
+      responseTime:
+        idx === 0 ? "< 1 hour" : idx === 1 ? "< 3 hours" : "< 24 hours",
       completedEvents: Math.max(50 - idx * 5, 10),
       successRate: `${Math.max(98 - idx * 2, 85)}%`,
     }));
@@ -674,12 +904,26 @@ function analyzeBudget(budget, attendees) {
   const numMatch = budget.match(/[\d,]+/);
   if (numMatch) {
     const amount = parseInt(numMatch[0].replace(/,/g, ""));
-    if (amount < 10000) return { feasibility: "low", note: "Budget may be tight for a quality event" };
-    if (amount < 50000) return { feasibility: "moderate", note: "Budget is workable for a mid-size event" };
-    return { feasibility: "high", note: "Budget looks comfortable for this event size" };
+    if (amount < 10000)
+      return {
+        feasibility: "low",
+        note: "Budget may be tight for a quality event",
+      };
+    if (amount < 50000)
+      return {
+        feasibility: "moderate",
+        note: "Budget is workable for a mid-size event",
+      };
+    return {
+      feasibility: "high",
+      note: "Budget looks comfortable for this event size",
+    };
   }
 
-  return { feasibility: "moderate", note: "Budget noted — organizer will confirm feasibility" };
+  return {
+    feasibility: "moderate",
+    note: "Budget noted — organizer will confirm feasibility",
+  };
 }
 
 /**
@@ -689,10 +933,14 @@ function buildSuggestions(entities) {
   const tips = [];
 
   if (!entities.date) {
-    tips.push("Consider specifying a date — organizers can confirm availability faster");
+    tips.push(
+      "Consider specifying a date — organizers can confirm availability faster"
+    );
   }
   if (!entities.budget) {
-    tips.push("Sharing a budget range helps organizers give accurate proposals");
+    tips.push(
+      "Sharing a budget range helps organizers give accurate proposals"
+    );
   }
   if (!entities.attendees) {
     tips.push("Mentioning expected attendance helps plan venue and catering");
@@ -702,7 +950,9 @@ function buildSuggestions(entities) {
   }
 
   return {
-    tip: tips[0] || "Book at least 4 weeks in advance for best organizer availability",
+    tip:
+      tips[0] ||
+      "Book at least 4 weeks in advance for best organizer availability",
     allTips: tips,
   };
 }
@@ -728,12 +978,19 @@ export const planEvent = async (req, res) => {
     }
 
     const validEventTypes = [
-      "conference", "workshop", "wedding", "birthday", "concert", "festival",
+      "conference",
+      "workshop",
+      "wedding",
+      "birthday",
+      "concert",
+      "festival",
     ];
     if (!validEventTypes.includes(eventType.toLowerCase())) {
       return res.status(400).json({
         success: false,
-        message: `Invalid event type. Must be one of: ${validEventTypes.join(", ")}`,
+        message: `Invalid event type. Must be one of: ${validEventTypes.join(
+          ", "
+        )}`,
       });
     }
 
@@ -753,7 +1010,9 @@ export const planEvent = async (req, res) => {
     }
 
     console.log(
-      `📋 Planning ${eventType} event for organizer: ${organizerId || "anonymous"}`
+      `📋 Planning ${eventType} event for organizer: ${
+        organizerId || "anonymous"
+      }`
     );
 
     let planningAgent = await AI_Agent.findOne({
@@ -795,7 +1054,10 @@ export const planEvent = async (req, res) => {
         userId: organizerId || null,
         logType: "event_planning",
         actionDetails: {
-          eventType, budget, attendees, location,
+          eventType,
+          budget,
+          attendees,
+          location,
           error: planningResult.error || planningResult.message,
         },
         success: false,
@@ -815,7 +1077,10 @@ export const planEvent = async (req, res) => {
       userId: organizerId || null,
       logType: "event_planning",
       actionDetails: {
-        eventType, budget, attendees, location,
+        eventType,
+        budget,
+        attendees,
+        location,
         plan_generated: true,
         llm_enhanced: planningResult.plan?.metadata?.llm_enhanced || false,
         processing_time: processingTime,
@@ -848,7 +1113,10 @@ export const planEvent = async (req, res) => {
           agentId: agent._id,
           userId: req.user?.id || null,
           logType: "event_planning",
-          actionDetails: { error: error.message, processing_time: processingTime },
+          actionDetails: {
+            error: error.message,
+            processing_time: processingTime,
+          },
           success: false,
           failureType: "api_error",
         });
@@ -860,7 +1128,10 @@ export const planEvent = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to generate event plan",
-      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Internal server error",
       timestamp: new Date().toISOString(),
     });
   }
@@ -899,7 +1170,9 @@ export const getPlanningAgentStats = async (req, res) => {
     const agent = await AI_Agent.findOne({ name: "planning-agent" });
 
     if (!agent) {
-      return res.status(404).json({ success: false, message: "Planning agent not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Planning agent not found" });
     }
 
     const filter = {
@@ -921,11 +1194,15 @@ export const getPlanningAgentStats = async (req, res) => {
           .select("actionDetails success createdAt"),
       ]);
 
-    const logsWithTime = recentLogs.filter((log) => log.actionDetails?.processing_time);
+    const logsWithTime = recentLogs.filter(
+      (log) => log.actionDetails?.processing_time
+    );
     const avgProcessingTime =
       logsWithTime.length > 0
-        ? logsWithTime.reduce((sum, log) => sum + log.actionDetails.processing_time, 0) /
-          logsWithTime.length
+        ? logsWithTime.reduce(
+            (sum, log) => sum + log.actionDetails.processing_time,
+            0
+          ) / logsWithTime.length
         : 0;
 
     const eventTypeStats = await AI_ActionLog.aggregate([
@@ -941,10 +1218,16 @@ export const getPlanningAgentStats = async (req, res) => {
           total_plans: totalPlans,
           successful: successfulPlans,
           failed: failedPlans,
-          success_rate: totalPlans > 0 ? ((successfulPlans / totalPlans) * 100).toFixed(1) : 0,
+          success_rate:
+            totalPlans > 0
+              ? ((successfulPlans / totalPlans) * 100).toFixed(1)
+              : 0,
           avg_processing_time_ms: Math.round(avgProcessingTime),
         },
-        event_types: eventTypeStats.map((stat) => ({ type: stat._id, count: stat.count })),
+        event_types: eventTypeStats.map((stat) => ({
+          type: stat._id,
+          count: stat.count,
+        })),
         recent_activity: recentLogs.map((log) => ({
           event_type: log.actionDetails?.eventType,
           budget: log.actionDetails?.budget,
@@ -990,13 +1273,19 @@ export const createNegotiation = async (req, res) => {
 export const updateNegotiation = async (req, res) => {
   try {
     const { id } = req.params;
-    const negotiation = await AI_NegotiationLog.findByIdAndUpdate(id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const negotiation = await AI_NegotiationLog.findByIdAndUpdate(
+      id,
+      req.body,
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
 
     if (!negotiation) {
-      return res.status(404).json({ success: false, message: "Negotiation not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Negotiation not found" });
     }
 
     res.json({ success: true, data: negotiation });
@@ -1016,7 +1305,9 @@ export const performFraudCheck = async (req, res) => {
     const booking = await Booking.findById(bookingId);
 
     if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Booking not found" });
     }
 
     const fraudAgent = await AI_Agent.findOne({
@@ -1039,7 +1330,11 @@ export const performFraudCheck = async (req, res) => {
       bookingId: bookingId,
       riskScore: riskScore,
       fraudStatus:
-        riskScore > 0.9 ? "fraudulent" : riskScore > 0.7 ? "suspicious" : "clean",
+        riskScore > 0.9
+          ? "fraudulent"
+          : riskScore > 0.7
+          ? "suspicious"
+          : "clean",
       checkVersion: "1.0",
     });
 
@@ -1065,7 +1360,9 @@ export const analyzeReviewSentiment = async (req, res) => {
       .populate("eventId", "event_name");
 
     if (!review) {
-      return res.status(404).json({ success: false, message: "Review not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Review not found" });
     }
 
     const sentimentAgent = await AI_Agent.findOne({
@@ -1198,8 +1495,12 @@ function analyzeSentiment(comment) {
   let score = 0;
   const words = comment?.toLowerCase().split(" ") || [];
 
-  positiveWords.forEach((word) => { if (words.includes(word)) score += 0.2; });
-  negativeWords.forEach((word) => { if (words.includes(word)) score -= 0.2; });
+  positiveWords.forEach((word) => {
+    if (words.includes(word)) score += 0.2;
+  });
+  negativeWords.forEach((word) => {
+    if (words.includes(word)) score -= 0.2;
+  });
 
   return Math.max(-1, Math.min(1, score));
 }
@@ -1217,7 +1518,9 @@ function detectIssues(comment) {
   const lowerComment = comment?.toLowerCase() || "";
 
   Object.keys(issueKeywords).forEach((issue) => {
-    if (issueKeywords[issue].some((keyword) => lowerComment.includes(keyword))) {
+    if (
+      issueKeywords[issue].some((keyword) => lowerComment.includes(keyword))
+    ) {
       issues.push(issue);
     }
   });
@@ -1245,6 +1548,6 @@ export default {
   clearBookingSupportHistoryAnonymous,
   checkBookingSupportHealth,
   getBookingSupportStats,
-  processEventRequest,   // NEW
-  getEventSuggestions,   // NEW
+  processEventRequest,
+  getEventSuggestions,
 };
