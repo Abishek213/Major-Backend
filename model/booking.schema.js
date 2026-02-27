@@ -35,11 +35,13 @@ const bookingSchema = new mongoose.Schema(
       },
       transactionId: {
         type: String,
-        unique: true  // Ensure unique transaction IDs
+        unique: true,
+        sparse: true  // ✅ allows multiple null values
       },
       pidx: {
         type: String,
-        unique: true  // Ensure unique PIDX values
+        unique: true,
+        sparse: true  // ✅ allows multiple null values
       },
       currency: {
         type: String,
